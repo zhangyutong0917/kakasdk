@@ -20,23 +20,24 @@ jobs:
         run: |
           export THEOS=/opt/theos
           if [ ! -d "$THEOS" ]; then
-            git clone --recursive https://github.com/theos/theos.git $THEOS
+            sudo mkdir -p $THEOS
+            sudo git clone --recursive https://github.com/theos/theos.git $THEOS
           fi
           brew install ldid || true
           echo "THEOS=$THEOS" >> $GITHUB_ENV
 
       - name: 下载 iOS SDK (git sparse checkout)
         run: |
-          mkdir -p /opt/theos/sdks
+          sudo mkdir -p /opt/theos/sdks
           cd /opt/theos/sdks
           if [ ! -d "iPhoneOS18.0.sdk" ]; then
             git clone --depth 1 -b main https://github.com/theos/sdks.git _sdks_tmp
             cd _sdks_tmp
             git sparse-checkout init --cone
             git sparse-checkout set iPhoneOS18.0.sdk
-            mv iPhoneOS18.0.sdk ..
+            sudo mv iPhoneOS18.0.sdk ..
             cd ..
-            rm -rf _sdks_tmp
+            sudo rm -rf _sdks_tmp
           fi
           ls -la /opt/theos/sdks/
 
