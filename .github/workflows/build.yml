@@ -38,14 +38,14 @@ jobs:
           sudo mkdir -p /opt/theos/sdks
           sudo chmod 777 /opt/theos/sdks
           cd /opt/theos/sdks
-          if [ ! -d "iPhoneOS18.0.sdk" ]; then
+          if [ ! -d "iPhoneOS16.5.sdk" ]; then
             echo "Cloning SDKs repo..."
             git clone --depth 1 https://github.com/theos/sdks.git _sdks_tmp
             echo "--- Repo contents ---"
             ls -la _sdks_tmp/
             echo "--- Searching for SDK ---"
-            find _sdks_tmp -name "iPhoneOS18.0.sdk" -type d
-            find _sdks_tmp -name "iPhoneOS18.0.sdk" -type d -exec cp -r {} /opt/theos/sdks/ \;
+            find _sdks_tmp -name "iPhoneOS16.5.sdk" -type d
+            find _sdks_tmp -name "iPhoneOS16.5.sdk" -type d -exec cp -r {} /opt/theos/sdks/ \;
             echo "--- After copy ---"
             ls -la /opt/theos/sdks/
             rm -rf _sdks_tmp
@@ -55,7 +55,7 @@ jobs:
       - name: 编译 dylib
         run: |
           export THEOS=/opt/theos
-          export SDKROOT=/opt/theos/sdks/iPhoneOS18.0.sdk
+          export SDKROOT=/opt/theos/sdks/iPhoneOS16.5.sdk
           make clean
           make
           ls -la .theos/obj/debug/
