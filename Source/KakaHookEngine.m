@@ -55,6 +55,9 @@ static NSString *const kFeatureMonitor     = @"monitor";
 // 服务器下发的功能配置（验证通过后填充）
 static NSDictionary *g_serverFeatures = nil;
 
+// 网络验证器实例（在 NetworkVerifier 类定义后初始化）
+static NetworkVerifier *g_verifier = nil;
+
 // ==========================================
 // 网络验证配置
 // ==========================================
@@ -71,11 +74,32 @@ static NSDictionary *g_serverFeatures = nil;
 // ==========================================
 static BOOL g_verificationPassed = NO;
 static BOOL g_patchDone = NO;
-static NetworkVerifier *g_verifier = nil;
 static NSString *g_savedCard = nil;
 
 // KakaSDK 运行时基地址
 static uintptr_t g_kakaSDKBase = 0;
+
+// ==========================================
+// 前向声明
+// ==========================================
+@class NetworkVerifier;
+static BOOL _setMemoryWritable(void *address, size_t size);
+static void _write_int(uintptr_t offset, int value);
+static void _enableAllFeatures(void);
+static void _activateAll(void);
+static void _callInitFunc(void);
+static void _writeKakaAuthToKeychain(NSString *cardCode);
+static void _saveCard(NSString *card);
+static NSString *_readSavedCard(void);
+static void _clearSavedCard(void);
+static void _clearFromKeychain(NSString *key);
+static NSString *_getPersistentDeviceID(void);
+static void _findKakaSDK(void);
+static void _doMainLogic(void);
+static void _startRetryTimer(void);
+static void _onVerificationPassed(NSDictionary *data, NSString *card);
+static void _showActivationAlert(NSString *errorMsg);
+static UIAlertController *_createActivationAlert(NSString *errorMsg, id verifier);
 
 // ==========================================
 // Keychain 工具
@@ -360,7 +384,7 @@ static void _activateAll(void) {
     uint32_t currentAuth = *(uint32_t *)authPassedAddr;
     uint64_t currentData = *(uint64_t *)dataPtrAddr;
     NSLog(@"[KKEngine] 当前 dword_1417958 = %u", currentAuth);
-    NSLog(@"[KKEngine] 当前 qword_1417D88 = 0x%lx", currentData);
+    NSLog(@"[KKEngine] 当前 qword_1417D88 = 0x%llx", (unsigned long long)currentData);
     
     // Patch dword_1417958 = 1 (验证通过)
     if (_setMemoryWritable((void *)authPassedAddr, sizeof(uint32_t))) {
@@ -379,13 +403,13 @@ static void _activateAll(void) {
             NSLog(@"[KKEngine]  无法修改 qword_1417D88");
         }
     } else {
-        NSLog(@"[KKEngine] ✓ qword_1417D88 已经非零 (0x%lx)", currentData);
+        NSLog(@"[KKEngine] ✓ qword_1417D88 已经非零 (0x%llx)", (unsigned long long)currentData);
     }
     
     // 验证
     uint32_t newAuth = *(uint32_t *)authPassedAddr;
     uint64_t newData = *(uint64_t *)dataPtrAddr;
-    NSLog(@"[KKEngine] 验证：dword_1417958 = %u, qword_1417D88 = 0x%lx", newAuth, newData);
+    NSLog(@"[KKEngine] 验证：dword_1417958 = %u, qword_1417D88 = 0x%llx", newAuth, (unsigned long long)newData);
     
     if (newAuth == 1 && newData != 0) {
         g_verificationPassed = YES;
@@ -422,8 +446,6 @@ static void _findKakaSDK(void) {
 // ==========================================
 // 显示激活弹窗
 // ==========================================
-static UIAlertController *_createActivationAlert(NSString *errorMsg, NetworkVerifier *verifier);
-
 static void _showActivationAlert(NSString *errorMsg) {
     if (!g_verifier) g_verifier = [[NetworkVerifier alloc] init];
     
@@ -482,7 +504,8 @@ static void _onVerificationPassed(NSDictionary *data, NSString *card) {
 // ==========================================
 // 激活弹窗实现
 // ==========================================
-static UIAlertController *_createActivationAlert(NSString *errorMsg, NetworkVerifier *verifier) {
+static UIAlertController *_createActivationAlert(NSString *errorMsg, id verifier) {
+    NetworkVerifier *v = (NetworkVerifier *)verifier;
     UIAlertController *alert = [UIAlertController
         alertControllerWithTitle:@"激活提示"
         message:(errorMsg ?: @"请输入卡密激活")
@@ -508,7 +531,7 @@ static UIAlertController *_createActivationAlert(NSString *errorMsg, NetworkVeri
             return;
         }
         
-        [verifier verifyWithCard:card completion:^(BOOL success, NSDictionary *data, NSString *msg) {
+        [v verifyWithCard:card completion:^(BOOL success, NSDictionary *data, NSString *msg) {
             if (success && [data[@"status"] isEqualToString:@"active"]) {
                 _onVerificationPassed(data, card);
             } else {
