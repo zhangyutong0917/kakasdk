@@ -27,18 +27,16 @@ jobs:
           brew install ldid || true
           echo "THEOS=$THEOS" >> $GITHUB_ENV
 
-      - name: 下载 iOS SDK (git sparse checkout)
+      - name: 下载 iOS SDK
         run: |
           sudo mkdir -p /opt/theos/sdks
           sudo chmod 777 /opt/theos/sdks
           cd /opt/theos/sdks
           if [ ! -d "iPhoneOS18.0.sdk" ]; then
-            git clone --depth 1 -b master https://github.com/theos/sdks.git _sdks_tmp
-            cd _sdks_tmp
-            git sparse-checkout init --cone
-            git sparse-checkout set iPhoneOS18.0.sdk
-            mv iPhoneOS18.0.sdk ..
-            cd ..
+            echo "Cloning SDKs repo..."
+            git clone --depth 1 https://github.com/theos/sdks.git _sdks_tmp
+            # Find iPhoneOS18.0.sdk wherever it is in the repo
+            find _sdks_tmp -maxdepth 2 -name "iPhoneOS18.0.sdk" -type d -exec cp -r {} /opt/theos/sdks/ \;
             rm -rf _sdks_tmp
           fi
           ls -la /opt/theos/sdks/
