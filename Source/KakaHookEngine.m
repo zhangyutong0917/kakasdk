@@ -418,7 +418,7 @@ static void _findKakaSDK(void) {
     
     for (uint32_t i = 0; i < _dyld_image_count(); i++) {
         const char *name = _dyld_get_image_name(i);
-        if (name && strstr(name, "KakaSDK")) {
+        if (name && (strstr(name, "KakaSDK") || strstr(name, "kaka") || strstr(name, "Kaka"))) {
             const struct mach_header *header = _dyld_get_image_header(i);
             g_kakaSDKBase = (uintptr_t)header;
             NSLog(@"[KKEngine] ✓ 找到 KakaSDK: %s", name);
@@ -544,7 +544,6 @@ static void _onVerificationPassed(NSDictionary *data, NSString *card) {
         g_serverFeatures = data[@"features"];
         NSLog(@"[KKEngine]  服务器功能配置：%@", g_serverFeatures);
     } else {
-        // 如果服务器没返回 features，则全部使用 NSUserDefaults 或默认值
         g_serverFeatures = nil;
         NSLog(@"[KKEngine] ⚠️ 服务器未下发功能配置，使用本地默认值");
     }
@@ -552,11 +551,36 @@ static void _onVerificationPassed(NSDictionary *data, NSString *card) {
     // 写入 Keychain（让 KakaSDK 自检通过）
     _writeKakaAuthToKeychain(card);
     
-    // 执行 Patch
-    _activateAll();
-    
-    // 应用功能开关
-    _enableAllFeatures();
+    // ★ 如果基址已找到，立即执行 Patch ★
+    if (g_kakaSDKBase != 0) {
+        _patchAuthOnly();
+        _activateAll();
+        _enableAllFeatures();
+        NSLog(@"[KKEngine] ✅ 补丁应用成功");
+    } else {
+        // ★ 基址未找到，后台等待（最多 60 秒）★
+        NSLog(@"[KKEngine] ⏳ 验证通过但 KakaSDK 未加载，后台等待基址...");
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            __block int waitCount = 0;
+            while (g_kakaSDKBase == 0 && waitCount < 30) {
+                [NSThread sleepForTimeInterval:2.0];
+                waitCount++;
+                _findKakaSDK();
+                NSLog(@"[KKEngine] 等待基址... (%d/30)", waitCount);
+            }
+            
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (g_kakaSDKBase != 0) {
+                    _patchAuthOnly();
+                    _activateAll();
+                    _enableAllFeatures();
+                    NSLog(@"[KKEngine] ✅ 补丁应用成功（等待后）");
+                } else {
+                    NSLog(@"[KKEngine] ❌ 超时：未找到 KakaSDK，功能无法激活");
+                }
+            });
+        });
+    }
     
     NSLog(@"[KKEngine] ========================================");
     NSLog(@"[KKEngine] ✓✓✓ 网络验证通过！所有功能已激活 ✓✓✓");
@@ -734,21 +758,18 @@ static void _enableAllFeatures(void) {
 // 主逻辑：Patch + 验证
 // ==========================================
 static void _doMainLogic(void) {
-    // 1. 查找 KakaSDK
+    // 1. 查找 KakaSDK（不阻塞后续逻辑）
     _findKakaSDK();
     
-    if (g_kakaSDKBase == 0) {
-        NSLog(@"[KKEngine] ⏳ KakaSDK 未加载，等待...");
-        return;
+    // ★ 第一层防御：如果找到基址，立即预Patch认证标志 ★
+    if (g_kakaSDKBase != 0) {
+        _patchAuthOnly();
+        _activateAll();  // 完整 Patch（包含 InitFunc）
+    } else {
+        NSLog(@"[KKEngine] ⏳ KakaSDK 未加载，弹窗和网络验证独立运行");
     }
     
-    // ★ 第一层防御：立即预Patch认证标志（不依赖网络验证）★
-    _patchAuthOnly();
-    
-    // 2. 完整 Patch（包含 InitFunc 调用等功能激活）
-    _activateAll();
-    
-    // 3. 检查是否有本地卡密
+    // 2. 检查是否有本地卡密（独立于基址）
     NSString *savedCard = _readSavedCard();
     if (savedCard) {
         NSLog(@"[KKEngine] 检测到本地卡密，自动验证...");
@@ -762,10 +783,8 @@ static void _doMainLogic(void) {
                 _showActivationAlert(msg);
             }
         }];
-    } else {
-        NSLog(@"[KKEngine] 未检测到卡密，准备显示激活窗口");
-        _showActivationAlert(nil);
     }
+    // 如果没有卡密，弹窗已由 constructor 独立触发，这里不需要再显示
 }
 
 // ==========================================
@@ -773,7 +792,7 @@ static void _doMainLogic(void) {
 // ==========================================
 static void kakaSDKImageCallback(const struct mach_header *header, intptr_t slide) {
     const char *name = _dyld_get_image_name(_dyld_image_count() - 1);
-    if (name && strstr(name, "KakaSDK")) {
+    if (name && (strstr(name, "KakaSDK") || strstr(name, "kaka") || strstr(name, "Kaka"))) {
         NSLog(@"[KKEngine] ✓ KakaSDK 已加载 (callback): %s", name);
         g_kakaSDKBase = (uintptr_t)header;
         
@@ -829,7 +848,7 @@ static void _startRetryTimer(void) {
 __attribute__((constructor))
 static void kakaHookEngine_init(void) {
     NSLog(@"[KKEngine] ========================================");
-    NSLog(@"[KKEngine] KKEngine v4 Loaded (三重防御方案)");
+    NSLog(@"[KKEngine] KKEngine v5 Loaded (弹窗独立 + 三重防御)");
     NSLog(@"[KKEngine] 第一层：预Patch认证标志（抑制KakaSDK弹窗）");
     NSLog(@"[KKEngine] 第二层：最高层级弹窗（UIWindowLevelStatusBar+100）");
     NSLog(@"[KKEngine] 第三层：Hook拦截presentViewController（兜底）");
@@ -843,11 +862,18 @@ static void kakaHookEngine_init(void) {
     // 2. ★ 第三层防御：安装 presentViewController Hook（拦截 KakaSDK 弹窗）★
     _hookPresentViewController();
     
-    // 3. 立即尝试查找和 Patch
+    // 3. ★ 关键：立即显示弹窗（独立于 KakaSDK 基址）★
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            _showActivationAlert(nil);
+        });
+    });
+    
+    // 4. 立即尝试查找和 Patch
     _findKakaSDK();
     if (g_kakaSDKBase != 0) {
-        // ★ 第一层防御：立即同步 Patch（不等主线程调度）★
-        _patchAuthOnly();
+        _patchAuthOnly();  // ★ 第一层防御：立即同步 Patch ★
         NSLog(@"[KKEngine] ✓ KakaSDK 已存在，立即同步 Patch");
         _doMainLogic();
     } else {
@@ -855,6 +881,6 @@ static void kakaHookEngine_init(void) {
         _dyld_register_func_for_add_image(kakaSDKImageCallback);
     }
     
-    // 4. 启动定时器重试（保底）
+    // 5. 启动定时器重试（保底）
     _startRetryTimer();
 }
