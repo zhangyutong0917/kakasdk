@@ -1,0 +1,25 @@
+//
+//  KakaHookEngine-Prefix.pch
+//  KakaHookEngine
+//
+//  预编译头文件
+//  基于逆向分析还原
+//
+
+#ifndef KakaHookEngine_Prefix_pch
+#define KakaHookEngine_Prefix_pch
+
+#ifdef __OBJC__
+    #import <Foundation/Foundation.h>
+    #import <UIKit/UIKit.h>
+    #import <Metal/Metal.h>
+    #import <MetalKit/MetalKit.h>
+    #import <Security/Security.h>
+    #import <CommonCrypto/CommonCrypto.h>
+    #import <mach/mach.h>
+    #import <mach/mach_time.h>
+    #import <mach-o/dyld.h>
+    #import <dlfcn.h>
+#endif
+
+#endif /* KakaHookEngine_Prefix_pch */

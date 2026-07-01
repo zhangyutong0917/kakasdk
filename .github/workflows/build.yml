@@ -1,0 +1,60 @@
+name: Build KakaHookEngine
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 修复 Homebrew 报错
+        run: |
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          brew --version || true
+
+      - name: 手动安装 Theos
+        run: |
+          export THEOS=/opt/theos
+          if [ ! -d "$THEOS" ]; then
+            git clone --recursive https://github.com/theos/theos.git $THEOS
+          fi
+          brew install ldid || true
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+
+      - name: 下载 iOS SDK (git sparse checkout)
+        run: |
+          mkdir -p /opt/theos/sdks
+          cd /opt/theos/sdks
+          if [ ! -d "iPhoneOS18.0.sdk" ]; then
+            git clone --depth 1 -b main https://github.com/theos/sdks.git _sdks_tmp
+            cd _sdks_tmp
+            git sparse-checkout init --cone
+            git sparse-checkout set iPhoneOS18.0.sdk
+            mv iPhoneOS18.0.sdk ..
+            cd ..
+            rm -rf _sdks_tmp
+          fi
+          ls -la /opt/theos/sdks/
+
+      - name: 编译 dylib
+        run: |
+          export THEOS=/opt/theos
+          export SDKROOT=/opt/theos/sdks/iPhoneOS18.0.sdk
+          make clean
+          make
+          ls -la .theos/obj/debug/
+
+      - name: 校验编译文件
+        run: |
+          file .theos/obj/debug/KakaHookEngine.dylib
+          ls -lh .theos/obj/debug/KakaHookEngine.dylib
+
+      - name: 上传编译成品
+        uses: actions/upload-artifact@v4
+        with:
+          name: KakaHookEngine_iOS16_26_dylib
+          path: .theos/obj/debug/KakaHookEngine.dylib
