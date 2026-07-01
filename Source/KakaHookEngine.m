@@ -473,18 +473,10 @@ static void _onVerificationPassed(NSDictionary *data, NSString *card) {
     
     // 应用功能开关
     _enableAllFeatures();
-}
-        }
-    }]];
     
-    dispatch_async(dispatch_get_main_queue(), ^{
-        for (UIWindow *w in [UIApplication sharedApplication].windows) {
-            if (w.windowLevel > UIWindowLevelNormal && w.rootViewController) {
-                [w.rootViewController presentViewController:ok animated:YES completion:nil];
-                break;
-            }
-        }
-    });
+    NSLog(@"[KKEngine] ========================================");
+    NSLog(@"[KKEngine] ✓✓✓ 网络验证通过！所有功能已激活 ✓✓✓");
+    NSLog(@"[KKEngine] ========================================");
 }
 
 // ==========================================
