@@ -22,6 +22,8 @@
 #include <stdarg.h>
 #import "fishhook/fishhook.h"
 
+@class NetworkVerifier;
+
 #define PT_DENY_ATTACH 31
 #ifndef _CADDR_T
 typedef char *caddr_t;
@@ -55,9 +57,6 @@ static NSString *const kFeatureMonitor     = @"monitor";
 // 服务器下发的功能配置（验证通过后填充）
 static NSDictionary *g_serverFeatures = nil;
 
-// 网络验证器实例（在 NetworkVerifier 类定义后初始化）
-static NetworkVerifier *g_verifier = nil;
-
 // ==========================================
 // 网络验证配置
 // ==========================================
@@ -82,7 +81,6 @@ static uintptr_t g_kakaSDKBase = 0;
 // ==========================================
 // 前向声明
 // ==========================================
-@class NetworkVerifier;
 static BOOL _setMemoryWritable(void *address, size_t size);
 static void _write_int(uintptr_t offset, int value);
 static void _enableAllFeatures(void);
@@ -283,6 +281,9 @@ static void _clearSavedCard(void) {
 }
 
 @end
+
+// 网络验证器实例（必须在 NetworkVerifier 类定义之后）
+static NetworkVerifier *g_verifier = nil;
 
 // ==========================================
 // 功能开关判断：服务器 > NSUserDefaults > 默认值
