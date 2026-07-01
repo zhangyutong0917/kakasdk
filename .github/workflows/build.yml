@@ -16,6 +16,12 @@ jobs:
           export HOMEBREW_NO_AUTO_UPDATE=1
           brew --version || true
 
+      - name: 配置 Xcode 命令行工具
+        run: |
+          sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+          xcode-select -p
+          which make
+
       - name: 手动安装 Theos
         run: |
           export THEOS=/opt/theos
