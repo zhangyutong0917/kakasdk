@@ -33,7 +33,7 @@ jobs:
           sudo chmod 777 /opt/theos/sdks
           cd /opt/theos/sdks
           if [ ! -d "iPhoneOS18.0.sdk" ]; then
-            git clone --depth 1 -b main https://github.com/theos/sdks.git _sdks_tmp
+            git clone --depth 1 -b master https://github.com/theos/sdks.git _sdks_tmp
             cd _sdks_tmp
             git sparse-checkout init --cone
             git sparse-checkout set iPhoneOS18.0.sdk
