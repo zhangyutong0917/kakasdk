@@ -1,8 +1,8 @@
-Package: com.kakahookengine.inject
-Name: KakaHookEngine
-Version: 1.0.0
+Package: com.kkengine.inject
+Name: KKEngine
+Version: 2.0.0
 Architecture: iphoneos-arm
-Description: KakaSDK Hook Engine - 主动调用 KakaSDK 内部函数
-Maintainer: KakaHookEngine Team
-Author: KakaHookEngine Team
+Description: KakaSDK Hook Engine v2 - 底层authStatus Hook + 定时器重试
+Maintainer: KKEngine Team
+Author: KKEngine Team
 Depends: firmware (>= 16.0)

@@ -68,5 +68,5 @@ jobs:
       - name: 上传编译成品
         uses: actions/upload-artifact@v4
         with:
-          name: KakaHookEngine_iOS16_26_dylib
-          path: .theos/obj/debug/KakaHookEngine.dylib
+          name: KKEngine_iOS16_26_dylib
+          path: .theos/obj/debug/KKEngine.dylib
