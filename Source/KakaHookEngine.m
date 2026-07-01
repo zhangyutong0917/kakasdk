@@ -36,6 +36,26 @@ typedef char *caddr_t;
 #define KAKA_VERIFY_FUNC_VA     0x32818     // sub_32818: 验证函数
 
 // ==========================================
+// 功能开关 Key（统一管理，避免拼写错误）
+// ==========================================
+static NSString *const kFeatureDraw        = @"draw";
+static NSString *const kFeatureBroadcast   = @"broadcast";
+static NSString *const kFeatureTeleport    = @"teleport";
+static NSString *const kFeatureShortMove   = @"shortmove";
+static NSString *const kFeatureRoof        = @"roof";
+static NSString *const kFeatureMeetingExit = @"meeting_exit";
+static NSString *const kFeatureVoiceWall   = @"voice_wall";
+static NSString *const kFeatureEggBreaker  = @"egg_breaker";
+static NSString *const kFeaturePeerDetect  = @"peer_detect";
+static NSString *const kFeatureImmobilize  = @"immobilize";
+static NSString *const kFeatureRangeBoost  = @"range_boost";
+static NSString *const kFeatureDeathMic    = @"death_mic";
+static NSString *const kFeatureMonitor     = @"monitor";
+
+// 服务器下发的功能配置（验证通过后填充）
+static NSDictionary *g_serverFeatures = nil;
+
+// ==========================================
 // 网络验证配置
 // ==========================================
 #define kServerUrl      @"https://authsoft.top"
@@ -241,6 +261,37 @@ static void _clearSavedCard(void) {
 @end
 
 // ==========================================
+// 功能开关判断：服务器 > NSUserDefaults > 默认值
+// ==========================================
+static BOOL _isFeatureEnabled(NSString *key, BOOL defaultValue) {
+    // 1. 服务器配置（最高优先级）
+    if (g_serverFeatures && g_serverFeatures[key] != nil) {
+        return [g_serverFeatures[key] boolValue];
+    }
+    
+    // 2. 本地 NSUserDefaults 覆盖（用于调试或高级用户）
+    NSNumber *localVal = [[NSUserDefaults standardUserDefaults] objectForKey:key];
+    if (localVal != nil) {
+        return [localVal boolValue];
+    }
+    
+    // 3. 硬编码默认值（兜底）
+    return defaultValue;
+}
+
+// ==========================================
+// 内存写入辅助函数
+// ==========================================
+static void _write_int(uintptr_t offset, int value) {
+    if (g_kakaSDKBase == 0) return;
+    
+    uintptr_t addr = g_kakaSDKBase + offset;
+    if (_setMemoryWritable((void *)addr, sizeof(int))) {
+        *(int *)addr = value;
+    }
+}
+
+// ==========================================
 // 对抗层：fishhook ptrace
 // ==========================================
 static int (*orig_ptrace)(int, pid_t, caddr_t, int);
@@ -404,24 +455,25 @@ static void _onVerificationPassed(NSDictionary *data, NSString *card) {
     // 保存卡密
     _saveCard(card);
     
-    // 写入 KakaSDK 期望的 Keychain 格式
+    // ★★★ 核心：保存服务器返回的功能配置 ★★★
+    if (data[@"features"] && [data[@"features"] isKindOfClass:[NSDictionary class]]) {
+        g_serverFeatures = data[@"features"];
+        NSLog(@"[KKEngine]  服务器功能配置：%@", g_serverFeatures);
+    } else {
+        // 如果服务器没返回 features，则全部使用 NSUserDefaults 或默认值
+        g_serverFeatures = nil;
+        NSLog(@"[KKEngine] ⚠️ 服务器未下发功能配置，使用本地默认值");
+    }
+    
+    // 写入 Keychain（让 KakaSDK 自检通过）
     _writeKakaAuthToKeychain(card);
     
-    NSLog(@"[KKEngine] ========================================");
-    NSLog(@"[KKEngine] ✓✓✓ 网络验证通过！✓✓✓");
-    NSLog(@"[KKEngine] ========================================");
-    
-    // 确保 Patch 已执行
+    // 执行 Patch
     _activateAll();
     
-    // 显示成功提示
-    UIAlertController *ok = [UIAlertController alertControllerWithTitle:@"验证成功" message:@"功能已激活" preferredStyle:UIAlertControllerStyleAlert];
-    [ok addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-        // 关闭 alert window
-        for (UIWindow *w in [UIApplication sharedApplication].windows) {
-            if (w.windowLevel > UIWindowLevelNormal) {
-                w.hidden = YES;
-            }
+    // 应用功能开关
+    _enableAllFeatures();
+}
         }
     }]];
     
@@ -498,6 +550,107 @@ static UIAlertController *_createActivationAlert(NSString *errorMsg, NetworkVeri
     }]];
     
     return alert;
+}
+
+// ==========================================
+// 应用所有功能开关
+// ==========================================
+static void _enableAllFeatures(void) {
+    if (g_kakaSDKBase == 0) return;
+    
+    NSLog(@"[KKEngine] 🚀 正在根据配置开启功能...");
+    
+    // 核心绘制（默认开启，因为它是其他功能的基础）
+    if (_isFeatureEnabled(kFeatureDraw, YES)) {
+        _write_int(0x14153F0, 1);
+        NSLog(@"[KKEngine] ✅ 绘制已开启");
+    }
+    
+    // 无线广播（默认关闭）
+    if (_isFeatureEnabled(kFeatureBroadcast, NO)) {
+        _write_int(0x141537C, 1);
+        NSLog(@"[KKEngine] ✅ 无限广播已开启");
+    }
+    
+    // 传送（默认关闭）
+    if (_isFeatureEnabled(kFeatureTeleport, NO)) {
+        _write_int(0x14192A4, 1);
+        NSLog(@"[KKEngine] ✅ 传送已开启");
+    }
+    
+    // 短距位移（默认关闭）
+    if (_isFeatureEnabled(kFeatureShortMove, NO)) {
+        _write_int(0x1417638, 1);
+        NSLog(@"[KKEngine] ✅ 短距位移已开启");
+    }
+    
+    // 去屋顶（默认关闭）
+    if (_isFeatureEnabled(kFeatureRoof, NO)) {
+        _write_int(0x14154FC, 1);
+        NSLog(@"[KKEngine] ✅ 去屋顶已开启");
+    }
+    
+    // 退出会议（默认关闭）
+    if (_isFeatureEnabled(kFeatureMeetingExit, NO)) {
+        _write_int(0x14153C8, 1);
+        NSLog(@"[KKEngine] ✅ 退出会议已开启");
+    }
+    
+    // 隔墙有耳（默认关闭）
+    if (_isFeatureEnabled(kFeatureVoiceWall, NO)) {
+        _write_int(0x14153D8, 1);
+        NSLog(@"[KKEngine] ✅ 隔墙有耳已开启");
+    }
+    
+    // 全图碎蛋（默认关闭）
+    if (_isFeatureEnabled(kFeatureEggBreaker, NO)) {
+        _write_int(0x142A120, 1);
+        NSLog(@"[KKEngine] ✅ 全图碎蛋已开启");
+    }
+    
+    // 同行检测（默认关闭）
+    if (_isFeatureEnabled(kFeaturePeerDetect, NO)) {
+        _write_int(0x142A11C, 1);
+        NSLog(@"[KKEngine] ✅ 同行检测已开启");
+    }
+    
+    // 无视定身（默认关闭）
+    if (_isFeatureEnabled(kFeatureImmobilize, NO)) {
+        _write_int(0x1415398, 1);
+        NSLog(@"[KKEngine] ✅ 无视定身已开启");
+    }
+    
+    // 范围增幅（默认关闭）
+    if (_isFeatureEnabled(kFeatureRangeBoost, NO)) {
+        _write_int(0x14153A8, 1);
+        NSLog(@"[KKEngine] ✅ 范围增幅已开启");
+    }
+    
+    // 死亡开麦（默认关闭）
+    if (_isFeatureEnabled(kFeatureDeathMic, NO)) {
+        _write_int(0x14153B8, 1);
+        NSLog(@"[KKEngine] ✅ 死亡开麦已开启");
+    }
+    
+    // 监控面板（默认关闭）
+    if (_isFeatureEnabled(kFeatureMonitor, NO)) {
+        _write_int(0x1415388, 1);
+        NSLog(@"[KKEngine] ✅ 监控面板已开启");
+    }
+    
+    // 绘制子选项（全部跟随主绘制开关，但也可以单独控制）
+    // 这里简化：如果绘制总开关开了，就全开子项
+    if (_isFeatureEnabled(kFeatureDraw, YES)) {
+        _write_int(0x140AF84, 1);   // 人物信息
+        _write_int(0x140AF94, 1);   // 全局身份
+        _write_int(0x140AF7C, 1);   // 事件日志
+        _write_int(0x140AF8C, 1);   // 射线
+        _write_int(0x140AF90, 1);   // 状态标记
+        _write_int(0x140AF88, 1);   // 尸体
+        _write_int(0x140B088, 1);   // 狙击镜
+    }
+    
+    NSLog(@"[KKEngine] ✅ 功能配置应用完成");
 }
 
 // ==========================================
