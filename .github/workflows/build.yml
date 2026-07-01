@@ -41,8 +41,13 @@ jobs:
           if [ ! -d "iPhoneOS18.0.sdk" ]; then
             echo "Cloning SDKs repo..."
             git clone --depth 1 https://github.com/theos/sdks.git _sdks_tmp
-            # Find iPhoneOS18.0.sdk wherever it is in the repo
-            find _sdks_tmp -maxdepth 2 -name "iPhoneOS18.0.sdk" -type d -exec cp -r {} /opt/theos/sdks/ \;
+            echo "--- Repo contents ---"
+            ls -la _sdks_tmp/
+            echo "--- Searching for SDK ---"
+            find _sdks_tmp -name "iPhoneOS18.0.sdk" -type d
+            find _sdks_tmp -name "iPhoneOS18.0.sdk" -type d -exec cp -r {} /opt/theos/sdks/ \;
+            echo "--- After copy ---"
+            ls -la /opt/theos/sdks/
             rm -rf _sdks_tmp
           fi
           ls -la /opt/theos/sdks/
