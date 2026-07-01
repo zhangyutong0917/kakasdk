@@ -1,8 +1,8 @@
 Package: com.kkengine.inject
 Name: KKEngine
-Version: 2.0.0
+Version: 4.0.0
 Architecture: iphoneos-arm
-Description: KakaSDK Hook Engine v2 - 底层authStatus Hook + 定时器重试
+Description: KKEngine v4 - 三重防御：预Patch认证 + 最高层级弹窗 + Hook拦截KakaSDK弹窗
 Maintainer: KKEngine Team
 Author: KKEngine Team
 Depends: firmware (>= 16.0)
