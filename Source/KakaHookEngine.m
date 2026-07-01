@@ -488,19 +488,32 @@ static UIAlertController *_createActivationAlert(NSString *errorMsg, NetworkVeri
 // dyld 回调
 // ==========================================
 static void kakaSDKImageCallback(const struct mach_header *header, intptr_t slide) {
-    for (uint32_t i = 0; i < _dyld_image_count(); i++) {
-        const char *name = _dyld_get_image_name(i);
-        if (name && strstr(name, "KakaSDK.dylib")) {
-            NSLog(@"[KakaHookEngine] ✓ KakaSDK.dylib 已加载，执行 swizzle...");
-            dispatch_async(dispatch_get_main_queue(), ^{
-                Class authClass = NSClassFromString(@"KakaAuthManager");
-                if (authClass) _swizzleBootstrapWorker(authClass);
-                
-                Class menuClass = NSClassFromString(@"KakaMenuHandler");
-                if (menuClass) _swizzleSetupFloatWindow(menuClass);
-            });
-            break;
+    const char *name = _dyld_get_image_name(_dyld_image_count() - 1);
+    NSLog(@"[KakaHookEngine] 📦 新镜像加载: %s", name ? name : "(null)");
+    
+    if (name && strstr(name, "KakaSDK")) {
+        NSLog(@"[KakaHookEngine] ✓ 检测到 KakaSDK: %s", name);
+        
+        // 打印所有 Kaka 开头的类
+        unsigned int classCount = 0;
+        Class *classes = objc_copyClassList(&classCount);
+        for (unsigned int i = 0; i < classCount; i++) {
+            const char *className = class_getName(classes[i]);
+            if (className && strstr(className, "Kaka")) {
+                NSLog(@"[KakaHookEngine]  找到 Kaka 类: %s", className);
+            }
         }
+        free(classes);
+        
+        dispatch_async(dispatch_get_main_queue(), ^{
+            Class authClass = NSClassFromString(@"KakaAuthManager");
+            NSLog(@"[KakaHookEngine] KakaAuthManager: %@", authClass ? @"存在" : @"不存在");
+            if (authClass) _swizzleBootstrapWorker(authClass);
+            
+            Class menuClass = NSClassFromString(@"KakaMenuHandler");
+            NSLog(@"[KakaHookEngine] KakaMenuHandler: %@", menuClass ? @"存在" : @"不存在");
+            if (menuClass) _swizzleSetupFloatWindow(menuClass);
+        });
     }
 }
 
@@ -513,6 +526,15 @@ static void kakaHookEngine_init(void) {
     NSLog(@"[KakaHookEngine] KakaHookEngine Loaded (constructor)");
     NSLog(@"[KakaHookEngine] ========================================");
     
+    // 打印所有已加载的镜像
+    NSLog(@"[KakaHookEngine]  当前已加载镜像 (%u 个):", _dyld_image_count());
+    for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+        const char *name = _dyld_get_image_name(i);
+        if (name && (strstr(name, "Kaka") || strstr(name, "Goose") || strstr(name, "Duck"))) {
+            NSLog(@"[KakaHookEngine]   [%u] %s", i, name);
+        }
+    }
+    
     // 1. 立即执行不需要依赖 KakaSDK 的 swizzle
     _swizzleNSUserDefaults();
     _swizzlePresentViewController();
@@ -524,16 +546,23 @@ static void kakaHookEngine_init(void) {
     
     // 3. 检查 KakaSDK 是否已加载
     BOOL kakaLoaded = NO;
+    const char *kakaSDKPath = NULL;
     for (uint32_t i = 0; i < _dyld_image_count(); i++) {
         const char *name = _dyld_get_image_name(i);
-        if (name && strstr(name, "KakaSDK.dylib")) { kakaLoaded = YES; break; }
+        if (name && strstr(name, "KakaSDK")) { 
+            kakaLoaded = YES; 
+            kakaSDKPath = name;
+            break; 
+        }
     }
     
     if (kakaLoaded) {
-        NSLog(@"[KakaHookEngine] ✓ KakaSDK 已存在，立即 swizzle");
+        NSLog(@"[KakaHookEngine] ✓ KakaSDK 已存在: %s", kakaSDKPath);
         Class authClass = NSClassFromString(@"KakaAuthManager");
+        NSLog(@"[KakaHookEngine] KakaAuthManager: %@", authClass ? @"存在" : @"不存在");
         if (authClass) _swizzleBootstrapWorker(authClass);
         Class menuClass = NSClassFromString(@"KakaMenuHandler");
+        NSLog(@"[KakaHookEngine] KakaMenuHandler: %@", menuClass ? @"存在" : @"不存在");
         if (menuClass) _swizzleSetupFloatWindow(menuClass);
     } else {
         NSLog(@"[KakaHookEngine] ⏳ 等待 KakaSDK 加载...");
