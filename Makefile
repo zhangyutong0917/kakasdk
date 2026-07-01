@@ -1,4 +1,4 @@
-export TARGET = iphone:clang:latest:16.0
+export TARGET = iphone:clang:16.5:16.0
 export ARCHS = arm64
 
 INSTALL_TARGET_PROCESSES = 鹅鸭杀
