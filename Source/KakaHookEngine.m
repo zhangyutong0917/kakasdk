@@ -103,23 +103,6 @@ static UIAlertController *_createActivationAlert(NSString *errorMsg, id verifier
 // Keychain 工具
 // ==========================================
 
-static NSString *_readFromKeychain(NSString *key) {
-    NSDictionary *query = @{
-        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecAttrService: KEYCHAIN_SERVICE,
-        (__bridge id)kSecAttrAccount: key,
-        (__bridge id)kSecReturnData: @YES,
-        (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne
-    };
-    CFTypeRef result = NULL;
-    OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
-    if (status == errSecSuccess && result) {
-        NSData *data = (__bridge_transfer NSData *)result;
-        return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    }
-    return nil;
-}
-
 static void _clearFromKeychain(NSString *key) {
     NSDictionary *deleteQuery = @{
         (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
