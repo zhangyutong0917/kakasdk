@@ -23,6 +23,7 @@
 #import <CommonCrypto/CommonDigest.h>
 #import <sys/sysctl.h>
 #include <stdarg.h>
+#import "fishhook/fishhook.h"
 
 #define PT_DENY_ATTACH 31
 #ifndef _CADDR_T
