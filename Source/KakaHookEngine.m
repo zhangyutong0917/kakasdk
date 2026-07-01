@@ -567,5 +567,35 @@ static void kakaHookEngine_init(void) {
     } else {
         NSLog(@"[KakaHookEngine] ⏳ 等待 KakaSDK 加载...");
         _dyld_register_func_for_add_image(kakaSDKImageCallback);
+        
+        // 延迟 5 秒后重试（防止 KakaSDK 加载太晚）
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            NSLog(@"[KakaHookEngine] 延迟 5 秒后重新检查 KakaSDK...");
+            BOOL retryLoaded = NO;
+            const char *retryPath = NULL;
+            for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+                const char *name = _dyld_get_image_name(i);
+                if (name && strstr(name, "KakaSDK")) {
+                    retryLoaded = YES;
+                    retryPath = name;
+                    break;
+                }
+            }
+            if (retryLoaded && !g_authState) {
+                NSLog(@"[KakaHookEngine] ✓ 延迟重试：KakaSDK 已加载: %s", retryPath);
+                Class authClass = NSClassFromString(@"KakaAuthManager");
+                if (authClass) _swizzleBootstrapWorker(authClass);
+                Class menuClass = NSClassFromString(@"KakaMenuHandler");
+                if (menuClass) _swizzleSetupFloatWindow(menuClass);
+            } else if (!retryLoaded) {
+                NSLog(@"[KakaHookEngine] ❌ 延迟 5 秒后仍未检测到 KakaSDK");
+                // 打印所有镜像
+                NSLog(@"[KakaHookEngine] 所有镜像列表:");
+                for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+                    const char *name = _dyld_get_image_name(i);
+                    if (name) NSLog(@"[KakaHookEngine]   [%u] %s", i, name);
+                }
+            }
+        });
     }
 }
