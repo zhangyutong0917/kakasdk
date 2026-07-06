@@ -617,40 +617,108 @@ static void _hookSendEvent(void) {
 }
 
 // ==========================================
-// ★ 第二层防御：显示激活弹窗（最高层级 + 焦点夺取）
+// ★ 第二层防御：显示激活弹窗（简化版，确保能显示）
 // ==========================================
+static UIWindow *g_alertWindow = nil;
+
 static void _showActivationAlert(NSString *errorMsg) {
     KLOG("_showActivationAlert 被调用");
     if (!g_verifier) g_verifier = [[NetworkVerifier alloc] init];
     
     dispatch_async(dispatch_get_main_queue(), ^{
         KLOG("📢 准备创建弹窗...");
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            KLOG("📢 开始创建 UIAlertController...");
-            UIAlertController *alert = _createActivationAlert(errorMsg, g_verifier);
+        
+        // ★ 创建独立窗口
+        g_alertWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        g_alertWindow.windowLevel = UIWindowLevelAlert + 100;  // 最高层级
+        g_alertWindow.backgroundColor = [UIColor colorWithWhite:0 alpha:0.5];
+        
+        // ★ 创建简单的 ViewController
+        UIViewController *rootVC = [[UIViewController alloc] init];
+        rootVC.view.backgroundColor = [UIColor clearColor];
+        g_alertWindow.rootViewController = rootVC;
+        
+        // ★ 显示窗口
+        [g_alertWindow setHidden:NO];
+        [g_alertWindow makeKeyAndVisible];
+        
+        KLOG("📢 窗口已创建，准备显示 Alert...");
+        
+        // ★ 延迟显示 Alert
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            UIAlertController *alert = [UIAlertController
+                alertControllerWithTitle:@"激活提示"
+                message:(errorMsg ?: @"请输入卡密激活")
+                preferredStyle:UIAlertControllerStyleAlert];
             
-            KLOG("📢 创建 UIWindow...");
-            // 创建新窗口 - 使用最高层级确保覆盖所有弹窗
-            UIWindow *alertWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-            alertWindow.windowLevel = UIWindowLevelStatusBar + 100;  // ★ 远超 KakaSDK 弹窗层级
+            // 添加输入框
+            [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+                textField.placeholder = @"请输入卡密";
+                textField.secureTextEntry = NO;
+                NSString *saved = _readSavedCard();
+                if (saved) textField.text = saved;
+            }];
             
-            UIViewController *rootVC = [[UIViewController alloc] init];
-            rootVC.view.backgroundColor = [UIColor clearColor];
-            alertWindow.rootViewController = rootVC;
-            
-            KLOG("📢 makeKeyAndVisible...");
-            [alertWindow makeKeyAndVisible];
-            
-            // ★ 强制夺取焦点：让其他窗口失去编辑状态
-            for (UIWindow *w in [UIApplication sharedApplication].windows) {
-                if (w != alertWindow && w.rootViewController) {
-                    [w.rootViewController.view endEditing:YES];
+            // 激活按钮
+            [alert addAction:[UIAlertAction actionWithTitle:@"激活" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                NSString *card = alert.textFields.firstObject.text;
+                if (card.length == 0) {
+                    _showActivationAlert(@"卡密不能为空");
+                    return;
                 }
-            }
+                
+                KLOG("📢 开始验证卡密...");
+                [g_verifier verifyWithCard:card completion:^(BOOL success, NSDictionary *data, NSString *msg) {
+                    if (success && [data[@"status"] isEqualToString:@"active"]) {
+                        KLOG("✅ 验证通过");
+                        _onVerificationPassed(data, card);
+                        // 关闭弹窗窗口
+                        [g_alertWindow setHidden:YES];
+                        g_alertWindow = nil;
+                    } else {
+                        KLOG("❌ 验证失败: %@", msg);
+                        _clearSavedCard();
+                        _clearFromKeychain(@"auth_data");
+                        _showActivationAlert(msg);
+                    }
+                }];
+            }]];
             
-            KLOG("📢 presentViewController...");
+            // 查看日志按钮
+            [alert addAction:[UIAlertAction actionWithTitle:@"查看日志" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                NSMutableArray *logs = _getLogArray();
+                NSString *logText = [logs componentsJoinedByString:@"\n"];
+                if (logText.length == 0) logText = @"(无日志)";
+                
+                UIAlertController *logAlert = [UIAlertController
+                    alertControllerWithTitle:@"KKEngine 日志"
+                    message:logText
+                    preferredStyle:UIAlertControllerStyleAlert];
+                
+                [logAlert addAction:[UIAlertAction actionWithTitle:@"复制日志" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                    [UIPasteboard generalPasteboard].string = logText;
+                }]];
+                
+                [logAlert addAction:[UIAlertAction actionWithTitle:@"关闭" style:UIAlertActionStyleCancel handler:nil]];
+                
+                [rootVC presentViewController:logAlert animated:YES completion:nil];
+            }]];
+            
+            // 清除卡密按钮
+            [alert addAction:[UIAlertAction actionWithTitle:@"清除卡密" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+                _clearSavedCard();
+                _clearFromKeychain(@"auth_data");
+                _showActivationAlert(@"已清除卡密，请重新输入");
+            }]];
+            
+            // 退出按钮
+            [alert addAction:[UIAlertAction actionWithTitle:@"退出" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
+                exit(0);
+            }]];
+            
+            KLOG("📢 显示 Alert...");
             [rootVC presentViewController:alert animated:YES completion:^{
-                KLOG("✅ 激活弹窗已显示（层级: %.0f）", alertWindow.windowLevel);
+                KLOG("✅ 激活弹窗已显示");
             }];
         });
     });
