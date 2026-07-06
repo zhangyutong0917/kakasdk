@@ -382,73 +382,84 @@ static BOOL _setMemoryWritable(void *address, size_t size) {
 
 // 调用 InitFunc_0 (sub_325BC) - 初始化绘制系统等
 static void _callInitFunc(void) {
-    if (g_kakaSDKBase == 0) return;
+    if (g_kakaSDKBase == 0) {
+        KLOG("❌ _callInitFunc: g_kakaSDKBase = 0");
+        return;
+    }
     
     uintptr_t initFuncAddr = g_kakaSDKBase + KAKA_INIT_FUNC_VA;
     void (*initFunc)(void) = (void (*)(void))initFuncAddr;
     
-    NSLog(@"[KKEngine] 调用 InitFunc_0 (0x%lx)...", initFuncAddr);
+    KLOG("调用 InitFunc_0 (0x%lx)...", initFuncAddr);
     initFunc();
-    NSLog(@"[KKEngine] ✅ InitFunc_0 调用完成");
+    KLOG("✅ InitFunc_0 调用完成");
 }
 
 // 统一激活函数
 static void _activateAll(void) {
-    if (g_patchDone || g_kakaSDKBase == 0) return;
+    KLOG("_activateAll 被调用");
+    KLOG("  g_patchDone = %d", g_patchDone);
+    KLOG("  g_kakaSDKBase = 0x%lx", g_kakaSDKBase);
+    
+    if (g_patchDone || g_kakaSDKBase == 0) {
+        KLOG("⚠️ _activateAll 提前返回：g_patchDone=%d, g_kakaSDKBase=0x%lx", g_patchDone, g_kakaSDKBase);
+        return;
+    }
     g_patchDone = YES;
     
-    NSLog(@"[KKEngine] ========================================");
-    NSLog(@"[KKEngine] 开始激活 KakaSDK");
-    NSLog(@"[KKEngine] KakaSDK 基地址：0x%lx", g_kakaSDKBase);
+    KLOG("========================================");
+    KLOG("开始激活 KakaSDK");
+    KLOG("KakaSDK 基地址：0x%lx", g_kakaSDKBase);
     
     // 计算运行时地址
     uintptr_t authPassedAddr = g_kakaSDKBase + KAKA_AUTH_PASSED_VA;
     uintptr_t dataPtrAddr = g_kakaSDKBase + KAKA_DATA_PTR_VA;
     
-    NSLog(@"[KKEngine] dword_1417958 地址：0x%lx", authPassedAddr);
-    NSLog(@"[KKEngine] qword_1417D88 地址：0x%lx", dataPtrAddr);
+    KLOG("dword_1417958 地址：0x%lx", authPassedAddr);
+    KLOG("qword_1417D88 地址：0x%lx", dataPtrAddr);
     
     // 读取当前值
     uint32_t currentAuth = *(uint32_t *)authPassedAddr;
     uint64_t currentData = *(uint64_t *)dataPtrAddr;
-    NSLog(@"[KKEngine] 当前 dword_1417958 = %u", currentAuth);
-    NSLog(@"[KKEngine] 当前 qword_1417D88 = 0x%llx", (unsigned long long)currentData);
+    KLOG("当前 dword_1417958 = %u", currentAuth);
+    KLOG("当前 qword_1417D88 = 0x%llx", (unsigned long long)currentData);
     
     // Patch dword_1417958 = 1 (验证通过)
     if (_setMemoryWritable((void *)authPassedAddr, sizeof(uint32_t))) {
         *(uint32_t *)authPassedAddr = 1;
-        NSLog(@"[KKEngine] ✅ dword_1417958 已设置为 1");
+        KLOG("✅ dword_1417958 已设置为 1");
     } else {
-        NSLog(@"[KKEngine] ❌ 无法修改 dword_1417958");
+        KLOG("❌ 无法修改 dword_1417958");
     }
     
     // Patch qword_1417D88 - 确保非零
     if (currentData == 0) {
         if (_setMemoryWritable((void *)dataPtrAddr, sizeof(uint64_t))) {
             *(uint64_t *)dataPtrAddr = 0x1;
-            NSLog(@"[KKEngine] ✅ qword_1417D88 已设置为 0x1");
+            KLOG("✅ qword_1417D88 已设置为 0x1");
         } else {
-            NSLog(@"[KKEngine]  无法修改 qword_1417D88");
+            KLOG("  无法修改 qword_1417D88");
         }
     } else {
-        NSLog(@"[KKEngine] ✓ qword_1417D88 已经非零 (0x%llx)", (unsigned long long)currentData);
+        KLOG("✓ qword_1417D88 已经非零 (0x%llx)", (unsigned long long)currentData);
     }
     
     // 验证
     uint32_t newAuth = *(uint32_t *)authPassedAddr;
     uint64_t newData = *(uint64_t *)dataPtrAddr;
-    NSLog(@"[KKEngine] 验证：dword_1417958 = %u, qword_1417D88 = 0x%llx", newAuth, (unsigned long long)newData);
+    KLOG("验证：dword_1417958 = %u, qword_1417D88 = 0x%llx", newAuth, (unsigned long long)newData);
     
     if (newAuth == 1 && newData != 0) {
         g_verificationPassed = YES;
-        NSLog(@"[KKEngine] ✓✓✓ Patch 成功！所有功能已激活 ✓✓✓");
+        KLOG("✓✓✓ Patch 成功！所有功能已激活 ✓✓✓");
         
         // 调用 InitFunc_0 初始化绘制系统
+        KLOG("准备调用 InitFunc_0...");
         _callInitFunc();
         
-        NSLog(@"[KKEngine] ========================================");
+        KLOG("========================================");
     } else {
-        NSLog(@"[KKEngine]  Patch 失败，值未正确设置");
+        KLOG("  Patch 失败，值未正确设置");
     }
 }
 
@@ -902,6 +913,7 @@ static void _showActivationAlert(NSString *errorMsg) {
 // 验证通过后的处理
 // ==========================================
 static void _onVerificationPassed(NSDictionary *data, NSString *card) {
+    KLOG("_onVerificationPassed 被调用");
     g_verificationPassed = YES;
     
     // 保存卡密
@@ -910,31 +922,35 @@ static void _onVerificationPassed(NSDictionary *data, NSString *card) {
     // ★★★ 核心：保存服务器返回的功能配置 ★★★
     if (data[@"features"] && [data[@"features"] isKindOfClass:[NSDictionary class]]) {
         g_serverFeatures = data[@"features"];
-        NSLog(@"[KKEngine]  服务器功能配置：%@", g_serverFeatures);
+        KLOG("服务器功能配置：%@", g_serverFeatures);
     } else {
         g_serverFeatures = nil;
-        NSLog(@"[KKEngine] ⚠️ 服务器未下发功能配置，使用本地默认值");
+        KLOG("⚠️ 服务器未下发功能配置，使用本地默认值");
     }
     
     // 写入 Keychain（让 KakaSDK 自检通过）
     _writeKakaAuthToKeychain(card);
     
     // ★ 如果基址已找到，立即执行 Patch ★
+    KLOG("检查基址：g_kakaSDKBase = 0x%lx", g_kakaSDKBase);
     if (g_kakaSDKBase != 0) {
+        KLOG("开始执行 Patch 流程...");
         _patchAuthOnly();
+        KLOG("_patchAuthOnly 完成，准备调用 _activateAll");
         _activateAll();
+        KLOG("_activateAll 完成，准备调用 _enableAllFeatures");
         _enableAllFeatures();
-        NSLog(@"[KKEngine] ✅ 补丁应用成功");
+        KLOG("✅ 补丁应用成功");
     } else {
         // ★ 基址未找到，后台等待（最多 60 秒）★
-        NSLog(@"[KKEngine] ⏳ 验证通过但 KakaSDK 未加载，后台等待基址...");
+        KLOG("⏳ 验证通过但 KakaSDK 未加载，后台等待基址...");
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
             __block int waitCount = 0;
             while (g_kakaSDKBase == 0 && waitCount < 30) {
                 [NSThread sleepForTimeInterval:2.0];
                 waitCount++;
                 _findKakaSDK();
-                NSLog(@"[KKEngine] 等待基址... (%d/30)", waitCount);
+                KLOG("等待基址... (%d/30)", waitCount);
             }
             
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -942,103 +958,107 @@ static void _onVerificationPassed(NSDictionary *data, NSString *card) {
                     _patchAuthOnly();
                     _activateAll();
                     _enableAllFeatures();
-                    NSLog(@"[KKEngine] ✅ 补丁应用成功（等待后）");
+                    KLOG("✅ 补丁应用成功（等待后）");
                 } else {
-                    NSLog(@"[KKEngine] ❌ 超时：未找到 KakaSDK，功能无法激活");
+                    KLOG("❌ 超时：未找到 KakaSDK，功能无法激活");
                 }
             });
         });
     }
     
-    NSLog(@"[KKEngine] ========================================");
-    NSLog(@"[KKEngine] ✓✓✓ 网络验证通过！所有功能已激活 ✓✓✓");
-    NSLog(@"[KKEngine] ========================================");
+    KLOG("========================================");
+    KLOG("✓✓✓ 网络验证通过！所有功能已激活 ✓✓✓");
+    KLOG("========================================");
 }
 
 // ==========================================
 // 应用所有功能开关
 // ==========================================
 static void _enableAllFeatures(void) {
-    if (g_kakaSDKBase == 0) return;
+    KLOG("_enableAllFeatures 被调用");
+    if (g_kakaSDKBase == 0) {
+        KLOG("⚠️ _enableAllFeatures: g_kakaSDKBase = 0");
+        return;
+    }
     
-    NSLog(@"[KKEngine] 🚀 正在根据配置开启功能...");
+    KLOG("🚀 正在根据配置开启功能...");
     
     // 核心绘制（默认开启，因为它是其他功能的基础）
     if (_isFeatureEnabled(kFeatureDraw, YES)) {
         _write_int(0x14153F0, 1);
-        NSLog(@"[KKEngine] ✅ 绘制已开启");
+        KLOG("✅ 绘制已开启");
     }
     
     // 无线广播（默认关闭）
     if (_isFeatureEnabled(kFeatureBroadcast, NO)) {
         _write_int(0x141537C, 1);
-        NSLog(@"[KKEngine] ✅ 无限广播已开启");
+        KLOG("✅ 无限广播已开启");
     }
     
     // 传送（默认关闭）
     if (_isFeatureEnabled(kFeatureTeleport, NO)) {
         _write_int(0x14192A4, 1);
-        NSLog(@"[KKEngine] ✅ 传送已开启");
+        KLOG("✅ 传送已开启");
     }
     
     // 短距位移（默认关闭）
     if (_isFeatureEnabled(kFeatureShortMove, NO)) {
         _write_int(0x1417638, 1);
-        NSLog(@"[KKEngine] ✅ 短距位移已开启");
+        KLOG("✅ 短距位移已开启");
     }
     
     // 去屋顶（默认关闭）
     if (_isFeatureEnabled(kFeatureRoof, NO)) {
         _write_int(0x14154FC, 1);
-        NSLog(@"[KKEngine] ✅ 去屋顶已开启");
+        KLOG("✅ 去屋顶已开启");
     }
     
     // 退出会议（默认关闭）
     if (_isFeatureEnabled(kFeatureMeetingExit, NO)) {
         _write_int(0x14153C8, 1);
-        NSLog(@"[KKEngine] ✅ 退出会议已开启");
+        KLOG("✅ 退出会议已开启");
     }
     
     // 隔墙有耳（默认关闭）
     if (_isFeatureEnabled(kFeatureVoiceWall, NO)) {
         _write_int(0x14153D8, 1);
-        NSLog(@"[KKEngine] ✅ 隔墙有耳已开启");
+        KLOG("✅ 隔墙有耳已开启");
     }
     
     // 全图碎蛋（默认关闭）
     if (_isFeatureEnabled(kFeatureEggBreaker, NO)) {
         _write_int(0x142A120, 1);
-        NSLog(@"[KKEngine] ✅ 全图碎蛋已开启");
+        KLOG("✅ 全图碎蛋已开启");
     }
     
     // 同行检测（默认关闭）
     if (_isFeatureEnabled(kFeaturePeerDetect, NO)) {
         _write_int(0x142A11C, 1);
-        NSLog(@"[KKEngine] ✅ 同行检测已开启");
+        KLOG("✅ 同行检测已开启");
     }
     
     // 无视定身（默认关闭）
     if (_isFeatureEnabled(kFeatureImmobilize, NO)) {
         _write_int(0x1415398, 1);
-        NSLog(@"[KKEngine] ✅ 无视定身已开启");
+        KLOG("✅ 无视定身已开启");
     }
     
     // 范围增幅（默认关闭）
     if (_isFeatureEnabled(kFeatureRangeBoost, NO)) {
         _write_int(0x14153A8, 1);
-        NSLog(@"[KKEngine] ✅ 范围增幅已开启");
+        KLOG("✅ 范围增幅已开启");
     }
     
     // 死亡开麦（默认关闭）
     if (_isFeatureEnabled(kFeatureDeathMic, NO)) {
         _write_int(0x14153B8, 1);
-        NSLog(@"[KKEngine] ✅ 死亡开麦已开启");
+        KLOG("✅ 死亡开麦已开启");
     }
     
     // 监控面板（默认关闭）
     if (_isFeatureEnabled(kFeatureMonitor, NO)) {
         _write_int(0x1415388, 1);
-        NSLog(@"[KKEngine] ✅ 监控面板已开启");
+        KLOG("✅ 监控面板已开启");
     }
     
     // 绘制子选项（全部跟随主绘制开关，但也可以单独控制）
@@ -1053,7 +1073,7 @@ static void _enableAllFeatures(void) {
         _write_int(0x140B088, 1);   // 狙击镜
     }
     
-    NSLog(@"[KKEngine] ✅ 功能配置应用完成");
+    KLOG("✅ 功能配置应用完成");
 }
 
 // ==========================================
@@ -1162,7 +1182,7 @@ static void kakaHookEngine_init(void) {
     remove("/tmp/KKEngine.log");
     
     KLOG("========================================");
-    KLOG("KKEngine v8 Loaded (扩展 Hook + 日志修复)");
+    KLOG("KKEngine v14 Loaded (Keychain修复+诊断)");
     KLOG("Hook 列表: presentViewController, UIWindow, sendEvent");
     KLOG("========================================");
     
