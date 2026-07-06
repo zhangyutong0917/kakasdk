@@ -139,8 +139,6 @@ static void _hookPresentViewController(void);
 static void _doMainLogic(void);
 static void _startRetryTimer(void);
 static void _onVerificationPassed(NSDictionary *data, NSString *card);
-static void _showActivationAlert(NSString *errorMsg);
-static UIAlertController *_createActivationAlert(NSString *errorMsg, id verifier);
 
 // ==========================================
 // Keychain 工具
@@ -617,110 +615,239 @@ static void _hookSendEvent(void) {
 }
 
 // ==========================================
-// ★ 第二层防御：显示激活弹窗（简化版，确保能显示）
+// ★ 自定义弹窗视图（不依赖 UIAlertController）
 // ==========================================
 static UIWindow *g_alertWindow = nil;
+static UITextField *g_cardTextField = nil;
 
-static void _showActivationAlert(NSString *errorMsg) {
-    KLOG("_showActivationAlert 被调用");
-    if (!g_verifier) g_verifier = [[NetworkVerifier alloc] init];
+@interface KKEngineAlertView : UIView
+@property (nonatomic, strong) UILabel *titleLabel;
+@property (nonatomic, strong) UILabel *messageLabel;
+@property (nonatomic, strong) UITextField *cardTextField;
+@property (nonatomic, strong) UIButton *activateBtn;
+@property (nonatomic, strong) UIButton *logBtn;
+@property (nonatomic, strong) UIButton *clearBtn;
+@property (nonatomic, strong) UIButton *exitBtn;
+@property (nonatomic, strong) UITextView *logTextView;
+@end
+
+@implementation KKEngineAlertView
+
+- (instancetype)initWithMessage:(NSString *)msg {
+    self = [super initWithFrame:CGRectMake(0, 0, 300, 400)];
+    if (self) {
+        self.backgroundColor = [UIColor whiteColor];
+        self.layer.cornerRadius = 12;
+        self.layer.masksToBounds = YES;
+        
+        CGFloat y = 15;
+        
+        // 标题
+        _titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(15, y, 270, 25)];
+        _titleLabel.text = @"激活提示";
+        _titleLabel.font = [UIFont boldSystemFontOfSize:18];
+        _titleLabel.textAlignment = NSTextAlignmentCenter;
+        [self addSubview:_titleLabel];
+        y += 30;
+        
+        // 消息
+        _messageLabel = [[UILabel alloc] initWithFrame:CGRectMake(15, y, 270, 40)];
+        _messageLabel.text = msg ?: @"请输入卡密激活";
+        _messageLabel.font = [UIFont systemFontOfSize:14];
+        _messageLabel.textAlignment = NSTextAlignmentCenter;
+        _messageLabel.numberOfLines = 2;
+        _messageLabel.textColor = [UIColor grayColor];
+        [self addSubview:_messageLabel];
+        y += 45;
+        
+        // 输入框
+        _cardTextField = [[UITextField alloc] initWithFrame:CGRectMake(20, y, 260, 36)];
+        _cardTextField.borderStyle = UITextBorderStyleRoundedRect;
+        _cardTextField.placeholder = @"请输入卡密";
+        _cardTextField.font = [UIFont systemFontOfSize:14];
+        NSString *saved = _readSavedCard();
+        if (saved) _cardTextField.text = saved;
+        g_cardTextField = _cardTextField;
+        [self addSubview:_cardTextField];
+        y += 45;
+        
+        // 激活按钮
+        _activateBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+        _activateBtn.frame = CGRectMake(20, y, 260, 36);
+        [_activateBtn setTitle:@"激活" forState:UIControlStateNormal];
+        _activateBtn.backgroundColor = [UIColor colorWithRed:0 green:0.5 blue:1 alpha:1];
+        [_activateBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        _activateBtn.layer.cornerRadius = 8;
+        _activateBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+        [_activateBtn addTarget:self action:@selector(onActivate) forControlEvents:UIControlEventTouchUpInside];
+        [self addSubview:_activateBtn];
+        y += 42;
+        
+        // 查看日志按钮
+        _logBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+        _logBtn.frame = CGRectMake(20, y, 125, 32);
+        [_logBtn setTitle:@"查看日志" forState:UIControlStateNormal];
+        _logBtn.backgroundColor = [UIColor lightGrayColor];
+        [_logBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        _logBtn.layer.cornerRadius = 6;
+        _logBtn.titleLabel.font = [UIFont systemFontOfSize:13];
+        [_logBtn addTarget:self action:@selector(onShowLog) forControlEvents:UIControlEventTouchUpInside];
+        [self addSubview:_logBtn];
+        
+        // 清除卡密按钮
+        _clearBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+        _clearBtn.frame = CGRectMake(155, y, 125, 32);
+        [_clearBtn setTitle:@"清除卡密" forState:UIControlStateNormal];
+        _clearBtn.backgroundColor = [UIColor redColor];
+        [_clearBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        _clearBtn.layer.cornerRadius = 6;
+        _clearBtn.titleLabel.font = [UIFont systemFontOfSize:13];
+        [_clearBtn addTarget:self action:@selector(onClearCard) forControlEvents:UIControlEventTouchUpInside];
+        [self addSubview:_clearBtn];
+        y += 38;
+        
+        // 退出按钮
+        _exitBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+        _exitBtn.frame = CGRectMake(20, y, 260, 32);
+        [_exitBtn setTitle:@"退出" forState:UIControlStateNormal];
+        _exitBtn.backgroundColor = [UIColor darkGrayColor];
+        [_exitBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        _exitBtn.layer.cornerRadius = 6;
+        _exitBtn.titleLabel.font = [UIFont systemFontOfSize:13];
+        [_exitBtn addTarget:self action:@selector(onExit) forControlEvents:UIControlEventTouchUpInside];
+        [self addSubview:_exitBtn];
+    }
+    return self;
+}
+
+- (void)onActivate {
+    NSString *card = _cardTextField.text;
+    if (card.length == 0) {
+        _messageLabel.text = @"卡密不能为空";
+        _messageLabel.textColor = [UIColor redColor];
+        return;
+    }
     
-    dispatch_async(dispatch_get_main_queue(), ^{
-        KLOG("📢 准备创建弹窗...");
-        
-        // ★ 创建独立窗口
-        g_alertWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-        g_alertWindow.windowLevel = UIWindowLevelAlert + 100;  // 最高层级
-        g_alertWindow.backgroundColor = [UIColor colorWithWhite:0 alpha:0.5];
-        
-        // ★ 创建简单的 ViewController
-        UIViewController *rootVC = [[UIViewController alloc] init];
-        rootVC.view.backgroundColor = [UIColor clearColor];
-        g_alertWindow.rootViewController = rootVC;
-        
-        // ★ 显示窗口
-        [g_alertWindow setHidden:NO];
-        [g_alertWindow makeKeyAndVisible];
-        
-        KLOG("📢 窗口已创建，准备显示 Alert...");
-        
-        // ★ 延迟显示 Alert
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            UIAlertController *alert = [UIAlertController
-                alertControllerWithTitle:@"激活提示"
-                message:(errorMsg ?: @"请输入卡密激活")
-                preferredStyle:UIAlertControllerStyleAlert];
-            
-            // 添加输入框
-            [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
-                textField.placeholder = @"请输入卡密";
-                textField.secureTextEntry = NO;
-                NSString *saved = _readSavedCard();
-                if (saved) textField.text = saved;
-            }];
-            
-            // 激活按钮
-            [alert addAction:[UIAlertAction actionWithTitle:@"激活" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-                NSString *card = alert.textFields.firstObject.text;
-                if (card.length == 0) {
-                    _showActivationAlert(@"卡密不能为空");
-                    return;
-                }
-                
-                KLOG("📢 开始验证卡密...");
-                [g_verifier verifyWithCard:card completion:^(BOOL success, NSDictionary *data, NSString *msg) {
-                    if (success && [data[@"status"] isEqualToString:@"active"]) {
-                        KLOG("✅ 验证通过");
-                        _onVerificationPassed(data, card);
-                        // 关闭弹窗窗口
-                        [g_alertWindow setHidden:YES];
-                        g_alertWindow = nil;
-                    } else {
-                        KLOG("❌ 验证失败: %@", msg);
-                        _clearSavedCard();
-                        _clearFromKeychain(@"auth_data");
-                        _showActivationAlert(msg);
-                    }
-                }];
-            }]];
-            
-            // 查看日志按钮
-            [alert addAction:[UIAlertAction actionWithTitle:@"查看日志" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-                NSMutableArray *logs = _getLogArray();
-                NSString *logText = [logs componentsJoinedByString:@"\n"];
-                if (logText.length == 0) logText = @"(无日志)";
-                
-                UIAlertController *logAlert = [UIAlertController
-                    alertControllerWithTitle:@"KKEngine 日志"
-                    message:logText
-                    preferredStyle:UIAlertControllerStyleAlert];
-                
-                [logAlert addAction:[UIAlertAction actionWithTitle:@"复制日志" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-                    [UIPasteboard generalPasteboard].string = logText;
-                }]];
-                
-                [logAlert addAction:[UIAlertAction actionWithTitle:@"关闭" style:UIAlertActionStyleCancel handler:nil]];
-                
-                [rootVC presentViewController:logAlert animated:YES completion:nil];
-            }]];
-            
-            // 清除卡密按钮
-            [alert addAction:[UIAlertAction actionWithTitle:@"清除卡密" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+    KLOG("📢 开始验证卡密...");
+    _activateBtn.enabled = NO;
+    [_activateBtn setTitle:@"验证中..." forState:UIControlStateNormal];
+    
+    if (!g_verifier) g_verifier = [[NetworkVerifier alloc] init];
+    [g_verifier verifyWithCard:card completion:^(BOOL success, NSDictionary *data, NSString *msg) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (success && [data[@"status"] isEqualToString:@"active"]) {
+                KLOG("✅ 验证通过");
+                _onVerificationPassed(data, card);
+                [g_alertWindow setHidden:YES];
+                g_alertWindow = nil;
+            } else {
+                KLOG("❌ 验证失败: %@", msg);
                 _clearSavedCard();
                 _clearFromKeychain(@"auth_data");
-                _showActivationAlert(@"已清除卡密，请重新输入");
-            }]];
-            
-            // 退出按钮
-            [alert addAction:[UIAlertAction actionWithTitle:@"退出" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
-                exit(0);
-            }]];
-            
-            KLOG("📢 显示 Alert...");
-            [rootVC presentViewController:alert animated:YES completion:^{
-                KLOG("✅ 激活弹窗已显示");
-            }];
+                _messageLabel.text = msg;
+                _messageLabel.textColor = [UIColor redColor];
+                _activateBtn.enabled = YES;
+                [_activateBtn setTitle:@"激活" forState:UIControlStateNormal];
+            }
         });
+    }];
+}
+
+- (void)onShowLog {
+    NSMutableArray *logs = _getLogArray();
+    NSString *logText = [logs componentsJoinedByString:@"\n"];
+    if (logText.length == 0) logText = @"(无日志)";
+    
+    if (!_logTextView) {
+        _logTextView = [[UITextView alloc] initWithFrame:CGRectMake(15, 15, 270, 370)];
+        _logTextView.font = [UIFont systemFontOfSize:10];
+        _logTextView.editable = NO;
+        _logTextView.backgroundColor = [UIColor colorWithWhite:0.95 alpha:1];
+        _logTextView.layer.cornerRadius = 6;
+    }
+    _logTextView.text = logText;
+    
+    // 替换内容显示日志
+    for (UIView *v in self.subviews) {
+        v.hidden = YES;
+    }
+    [self addSubview:_logTextView];
+    _logTextView.hidden = NO;
+    
+    // 添加关闭按钮
+    UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    closeBtn.frame = CGRectMake(20, 390, 260, 36);
+    [closeBtn setTitle:@"复制并关闭" forState:UIControlStateNormal];
+    closeBtn.backgroundColor = [UIColor blueColor];
+    [closeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    closeBtn.layer.cornerRadius = 8;
+    [closeBtn addTarget:self action:@selector(onCopyAndCloseLog) forControlEvents:UIControlEventTouchUpInside];
+    closeBtn.tag = 999;
+    [self addSubview:closeBtn];
+}
+
+- (void)onCopyAndCloseLog {
+    [UIPasteboard generalPasteboard].string = _logTextView.text;
+    
+    UIView *closeBtn = [self viewWithTag:999];
+    [closeBtn removeFromSuperview];
+    [_logTextView removeFromSuperview];
+    _logTextView = nil;
+    
+    for (UIView *v in self.subviews) {
+        v.hidden = NO;
+    }
+}
+
+- (void)onClearCard {
+    _clearSavedCard();
+    _clearFromKeychain(@"auth_data");
+    _messageLabel.text = @"已清除卡密，请重新输入";
+    _messageLabel.textColor = [UIColor orangeColor];
+    _cardTextField.text = @"";
+}
+
+- (void)onExit {
+    exit(0);
+}
+
+@end
+
+// ==========================================
+// ★ 显示激活弹窗（使用自定义 UIView）
+// ==========================================
+static void _showActivationAlert(NSString *errorMsg) {
+    KLOG("_showActivationAlert 被调用: %@", errorMsg ?: @"无错误信息");
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // 如果已有窗口，先关闭
+        if (g_alertWindow) {
+            [g_alertWindow setHidden:YES];
+            g_alertWindow = nil;
+        }
+        
+        KLOG("📢 创建窗口...");
+        
+        // 创建窗口
+        g_alertWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        g_alertWindow.windowLevel = UIWindowLevelAlert + 100;
+        g_alertWindow.backgroundColor = [UIColor colorWithWhite:0 alpha:0.6];
+        
+        // 创建自定义弹窗视图
+        CGRect screenBounds = [UIScreen mainScreen].bounds;
+        KKEngineAlertView *alertView = [[KKEngineAlertView alloc] initWithMessage:errorMsg];
+        alertView.center = CGPointMake(screenBounds.size.width / 2, screenBounds.size.height / 2);
+        
+        // 创建根 ViewController
+        UIViewController *rootVC = [[UIViewController alloc] init];
+        rootVC.view.backgroundColor = [UIColor clearColor];
+        [rootVC.view addSubview:alertView];
+        g_alertWindow.rootViewController = rootVC;
+        
+        // 显示窗口
+        [g_alertWindow makeKeyAndVisible];
+        
+        KLOG("✅ 自定义弹窗已显示");
     });
 }
 
@@ -779,103 +906,6 @@ static void _onVerificationPassed(NSDictionary *data, NSString *card) {
     NSLog(@"[KKEngine] ========================================");
     NSLog(@"[KKEngine] ✓✓✓ 网络验证通过！所有功能已激活 ✓✓✓");
     NSLog(@"[KKEngine] ========================================");
-}
-
-// ==========================================
-// 激活弹窗实现
-// ==========================================
-static UIAlertController *_createActivationAlert(NSString *errorMsg, id verifier) {
-    NetworkVerifier *v = (NetworkVerifier *)verifier;
-    UIAlertController *alert = [UIAlertController
-        alertControllerWithTitle:@"激活提示"
-        message:(errorMsg ?: @"请输入卡密激活")
-        preferredStyle:UIAlertControllerStyleAlert];
-    
-    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
-        textField.placeholder = @"请输入卡密";
-        textField.secureTextEntry = NO;
-        NSString *saved = _readSavedCard();
-        if (saved) textField.text = saved;
-    }];
-    
-    [alert addAction:[UIAlertAction actionWithTitle:@"激活" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-        NSString *card = alert.textFields.firstObject.text;
-        if (card.length == 0) {
-            UIAlertController *retry = _createActivationAlert(@"卡密不能为空", verifier);
-            for (UIWindow *w in [UIApplication sharedApplication].windows) {
-                if (w.windowLevel > UIWindowLevelNormal && w.rootViewController) {
-                    [w.rootViewController presentViewController:retry animated:YES completion:nil];
-                    break;
-                }
-            }
-            return;
-        }
-        
-        [v verifyWithCard:card completion:^(BOOL success, NSDictionary *data, NSString *msg) {
-            if (success && [data[@"status"] isEqualToString:@"active"]) {
-                _onVerificationPassed(data, card);
-            } else {
-                _clearSavedCard();
-                _clearFromKeychain(@"auth_data");
-                UIAlertController *retry = _createActivationAlert(msg, verifier);
-                for (UIWindow *w in [UIApplication sharedApplication].windows) {
-                    if (w.windowLevel > UIWindowLevelNormal && w.rootViewController) {
-                        [w.rootViewController presentViewController:retry animated:YES completion:nil];
-                        break;
-                    }
-                }
-            }
-        }];
-    }]];
-    
-    [alert addAction:[UIAlertAction actionWithTitle:@"查看日志" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-        NSMutableArray *logs = _getLogArray();
-        NSString *logText = [logs componentsJoinedByString:@"\n"];
-        if (logText.length == 0) {
-            logText = @"(无日志)";
-        }
-        
-        UIAlertController *logAlert = [UIAlertController
-            alertControllerWithTitle:@"KKEngine 日志"
-            message:logText
-            preferredStyle:UIAlertControllerStyleAlert];
-        
-        [logAlert addAction:[UIAlertAction actionWithTitle:@"复制日志" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-            [UIPasteboard generalPasteboard].string = logText;
-        }]];
-        
-        [logAlert addAction:[UIAlertAction actionWithTitle:@"清除日志" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
-            [_getLogArray() removeAllObjects];
-            _saveLogs();
-        }]];
-        
-        [logAlert addAction:[UIAlertAction actionWithTitle:@"关闭" style:UIAlertActionStyleCancel handler:nil]];
-        
-        for (UIWindow *w in [UIApplication sharedApplication].windows) {
-            if (w.windowLevel > UIWindowLevelNormal && w.rootViewController) {
-                [w.rootViewController presentViewController:logAlert animated:YES completion:nil];
-                break;
-            }
-        }
-    }]];
-    
-    [alert addAction:[UIAlertAction actionWithTitle:@"清除卡密" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
-        _clearSavedCard();
-        _clearFromKeychain(@"auth_data");
-        UIAlertController *cleared = _createActivationAlert(@"已清除卡密，请重新输入", verifier);
-        for (UIWindow *w in [UIApplication sharedApplication].windows) {
-            if (w.windowLevel > UIWindowLevelNormal && w.rootViewController) {
-                [w.rootViewController presentViewController:cleared animated:YES completion:nil];
-                break;
-            }
-        }
-    }]];
-    
-    [alert addAction:[UIAlertAction actionWithTitle:@"退出" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
-        exit(0);
-    }]];
-    
-    return alert;
 }
 
 // ==========================================
