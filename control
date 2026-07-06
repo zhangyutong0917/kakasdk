@@ -1,8 +1,8 @@
 Package: com.kkengine.inject
 Name: KKEngine
-Version: 7.0.0
+Version: 8.0.0
 Architecture: iphoneos-arm
-Description: KKEngine v7 - 修复基地址匹配错误（精确匹配 KakaSDK.dylib）
+Description: KKEngine v8 - 扩展Hook拦截 + 日志修复(fp直接写文件)
 Maintainer: KKEngine Team
 Author: KKEngine Team
 Depends: firmware (>= 16.0)

@@ -79,6 +79,23 @@ static NSString *g_savedCard = nil;
 static uintptr_t g_kakaSDKBase = 0;
 
 // ==========================================
+// ★ 日志写入文件（使用 fprintf 避免 iOS 隐私保护）
+// ==========================================
+static void _writeLog(const char *format, ...) {
+    FILE *file = fopen("/tmp/KKEngine.log", "a");
+    if (!file) return;
+    
+    va_list args;
+    va_start(args, format);
+    vfprintf(file, format, args);
+    fprintf(file, "\n");
+    va_end(args);
+    fclose(file);
+}
+
+#define KLOG(fmt, ...) _writeLog("[KKEngine] " fmt, ##__VA_ARGS__)
+
+// ==========================================
 // 前向声明
 // ==========================================
 static BOOL _setMemoryWritable(void *address, size_t size);
@@ -452,9 +469,9 @@ static void _patchAuthOnly(void) {
     // Patch dword_1417958 = 1（让 KakaSDK 认为已授权，抑制弹窗逻辑）
     if (_setMemoryWritable((void *)authPassedAddr, sizeof(uint32_t))) {
         *(uint32_t *)authPassedAddr = 1;
-        NSLog(@"[KKEngine] ✅ 认证标志已预置 (dword_1417958=1)，KakaSDK 弹窗已被抑制");
+        KLOG("✅ 认证标志已预置 (dword_1417958=1)，KakaSDK 弹窗已被抑制");
     } else {
-        NSLog(@"[KKEngine] ❌ 预Patch dword_1417958 失败");
+        KLOG("❌ 预Patch dword_1417958 失败");
     }
     
     // Patch qword_1417D88 != 0
@@ -462,10 +479,10 @@ static void _patchAuthOnly(void) {
     if (currentData == 0) {
         if (_setMemoryWritable((void *)dataPtrAddr, sizeof(uint64_t))) {
             *(uint64_t *)dataPtrAddr = 0x1;
-            NSLog(@"[KKEngine] ✅ qword_1417D88 已预置为 0x1");
+            KLOG("✅ qword_1417D88 已预置为 0x1");
         }
     } else {
-        NSLog(@"[KKEngine] ✓ qword_1417D88 已非零 (0x%llx)", (unsigned long long)currentData);
+        KLOG("✓ qword_1417D88 已非零 (0x%llx)", (unsigned long long)currentData);
     }
 }
 
@@ -479,7 +496,7 @@ static void _hookPresentViewController(void) {
     SEL presentSEL = @selector(presentViewController:animated:completion:);
     Method method = class_getInstanceMethod(vcClass, presentSEL);
     if (!method) {
-        NSLog(@"[KKEngine] ❌ 未找到 presentViewController 方法");
+        KLOG("❌ 未找到 presentViewController 方法");
         return;
     }
     
@@ -492,10 +509,12 @@ static void _hookPresentViewController(void) {
             NSString *title = alert.title ?: @"";
             NSString *message = alert.message ?: @"";
             
+            KLOG("🔍 presentViewController: title='%s' message='%s'", title.UTF8String, message.UTF8String);
+            
             if ([title containsString:@"激活"] || [title containsString:@"授权"] || [title containsString:@"验证"] ||
                 [message containsString:@"激活"] || [message containsString:@"授权"] || [message containsString:@"验证"] ||
                 [message containsString:@"卡密"] || [title containsString:@"卡密"]) {
-                NSLog(@"[KKEngine] 🚫 拦截 KakaSDK 弹窗：title='%@' message='%@'", title, message);
+                KLOG("🚫 拦截 KakaSDK 弹窗：title='%s' message='%s'", title.UTF8String, message.UTF8String);
                 if (completion) completion();
                 return; // 直接丢弃，不显示
             }
@@ -505,19 +524,88 @@ static void _hookPresentViewController(void) {
     });
     
     method_setImplementation(method, newImp);
-    NSLog(@"[KKEngine] ✅ presentViewController Hook 已安装（第三层防御就绪）");
+    KLOG("✅ presentViewController Hook 已安装（第三层防御就绪）");
+}
+
+// ==========================================
+// ★ 扩展 Hook：拦截 UIWindow makeKeyAndVisible
+// ==========================================
+static void (*orig_makeKeyAndVisible)(id, SEL);
+static void fake_makeKeyAndVisible(id self, SEL _cmd) {
+    UIWindow *window = (UIWindow *)self;
+    
+    // 检查是否是 KakaSDK 的窗口（通过 windowLevel 或其他特征）
+    if (window.windowLevel > UIWindowLevelNormal && window.windowLevel < UIWindowLevelStatusBar + 50) {
+        // 可能是 KakaSDK 的弹窗窗口，检查其内容
+        if (window.rootViewController) {
+            NSString *vcClass = NSStringFromClass([window.rootViewController class]);
+            KLOG("🔍 UIWindow makeKeyAndVisible: %@ (level=%.0f)", vcClass.UTF8String, window.windowLevel);
+            
+            // 如果是 UIAlertController 或类似弹窗，拦截
+            if ([vcClass containsString:@"Alert"] || [vcClass containsString:@"Dialog"]) {
+                KLOG("🚫 拦截 KakaSDK UIWindow 弹窗");
+                return; // 不显示
+            }
+        }
+    }
+    
+    orig_makeKeyAndVisible(self, _cmd);
+}
+
+static void _hookUIWindow(void) {
+    Class windowClass = [UIWindow class];
+    SEL sel = @selector(makeKeyAndVisible);
+    Method method = class_getInstanceMethod(windowClass, sel);
+    if (!method) return;
+    
+    orig_makeKeyAndVisible = (void (*)(id, SEL))method_getImplementation(method);
+    IMP newImp = imp_implementationWithBlock(^(id self) {
+        fake_makeKeyAndVisible(self, sel);
+    });
+    method_setImplementation(method, newImp);
+    KLOG("✅ UIWindow makeKeyAndVisible Hook 已安装");
+}
+
+// ==========================================
+// ★ 扩展 Hook：拦截 UIApplication sendEvent（事件分发）
+// ==========================================
+static void (*orig_sendEvent)(id, SEL, UIEvent *);
+static void fake_sendEvent(id self, SEL _cmd, UIEvent *event) {
+    // 检查是否有新的窗口出现
+    if (event.type == UIEventTypeTouches) {
+        // 可以在这里检测并拦截 KakaSDK 的弹窗
+    }
+    orig_sendEvent(self, _cmd, event);
+}
+
+static void _hookSendEvent(void) {
+    Class appClass = [UIApplication class];
+    SEL sel = @selector(sendEvent:);
+    Method method = class_getInstanceMethod(appClass, sel);
+    if (!method) return;
+    
+    orig_sendEvent = (void (*)(id, SEL, UIEvent *))method_getImplementation(method);
+    IMP newImp = imp_implementationWithBlock(^(id self, UIEvent *event) {
+        fake_sendEvent(self, sel, event);
+    });
+    method_setImplementation(method, newImp);
+    KLOG("✅ UIApplication sendEvent Hook 已安装");
 }
 
 // ==========================================
 // ★ 第二层防御：显示激活弹窗（最高层级 + 焦点夺取）
 // ==========================================
 static void _showActivationAlert(NSString *errorMsg) {
+    KLOG("_showActivationAlert 被调用");
     if (!g_verifier) g_verifier = [[NetworkVerifier alloc] init];
     
     dispatch_async(dispatch_get_main_queue(), ^{
+        KLOG("📢 准备创建弹窗...");
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            KLOG("📢 开始创建 UIAlertController...");
             UIAlertController *alert = _createActivationAlert(errorMsg, g_verifier);
             
+            KLOG("📢 创建 UIWindow...");
             // 创建新窗口 - 使用最高层级确保覆盖所有弹窗
             UIWindow *alertWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
             alertWindow.windowLevel = UIWindowLevelStatusBar + 100;  // ★ 远超 KakaSDK 弹窗层级
@@ -525,6 +613,8 @@ static void _showActivationAlert(NSString *errorMsg) {
             UIViewController *rootVC = [[UIViewController alloc] init];
             rootVC.view.backgroundColor = [UIColor clearColor];
             alertWindow.rootViewController = rootVC;
+            
+            KLOG("📢 makeKeyAndVisible...");
             [alertWindow makeKeyAndVisible];
             
             // ★ 强制夺取焦点：让其他窗口失去编辑状态
@@ -534,8 +624,9 @@ static void _showActivationAlert(NSString *errorMsg) {
                 }
             }
             
+            KLOG("📢 presentViewController...");
             [rootVC presentViewController:alert animated:YES completion:^{
-                NSLog(@"[KKEngine] ✅ 激活弹窗已显示（层级: %.0f）", alertWindow.windowLevel);
+                KLOG("✅ 激活弹窗已显示（层级: %.0f）", alertWindow.windowLevel);
             }];
         });
     });
@@ -867,44 +958,52 @@ static void _startRetryTimer(void) {
 // ==========================================
 __attribute__((constructor))
 static void kakaHookEngine_init(void) {
-    NSLog(@"[KKEngine] ========================================");
-    NSLog(@"[KKEngine] KKEngine v6 Loaded (安全启动 + 弹窗独立)");
-    NSLog(@"[KKEngine] 第一层：预Patch认证标志（抑制KakaSDK弹窗）");
-    NSLog(@"[KKEngine] 第二层：最高层级弹窗（UIWindowLevelStatusBar+100）");
-    NSLog(@"[KKEngine] 第三层：Hook拦截presentViewController（兜底）");
-    NSLog(@"[KKEngine] ========================================");
+    // 清空旧日志
+    remove("/tmp/KKEngine.log");
+    
+    KLOG("========================================");
+    KLOG("KKEngine v8 Loaded (扩展 Hook + 日志修复)");
+    KLOG("Hook 列表: presentViewController, UIWindow, sendEvent");
+    KLOG("========================================");
     
     // 1. Hook ptrace（反调试）
     struct rebinding ptraceRebind = {"ptrace", fake_ptrace, (void *)&orig_ptrace};
     rebind_symbols(&ptraceRebind, 1);
-    NSLog(@"[KKEngine] ✅ ptrace 已屏蔽");
+    KLOG("✅ ptrace 已屏蔽");
     
-    // 2. ★ 第三层防御：安装 presentViewController Hook（拦截 KakaSDK 弹窗）★
+    // 2. ★ 安装所有 Hook ★
     _hookPresentViewController();
+    _hookUIWindow();
+    _hookSendEvent();
+    KLOG("✅ 所有 Hook 安装完成");
     
     // 3. ★ 关键：立即显示弹窗（独立于 KakaSDK 基址）★
+    KLOG("📢 0.5秒后将显示激活弹窗...");
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         static dispatch_once_t onceToken;
         dispatch_once(&onceToken, ^{
+            KLOG("📢 开始显示激活弹窗...");
             _showActivationAlert(nil);
         });
     });
     
     // 4. ★ 安全启动：不在 constructor 中直接调用 _activateAll ★
-    // 让 Patch 操作延迟到 KakaSDK 完全加载后
+    KLOG("🔍 开始查找 KakaSDK...");
     _findKakaSDK();
     if (g_kakaSDKBase != 0) {
-        NSLog(@"[KKEngine] ✓ KakaSDK 已存在，延迟执行 Patch（等待内存就绪）");
+        KLOG("✓ KakaSDK 已找到，基地址: 0x%lx", (unsigned long)g_kakaSDKBase);
         // 延迟 0.1 秒再执行，确保 KakaSDK 内存完全映射
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            KLOG("⏱ 开始执行 Patch...");
             _patchAuthOnly();
             _doMainLogic();
         });
     } else {
-        NSLog(@"[KKEngine]  等待 KakaSDK 加载...");
+        KLOG("⏳ 等待 KakaSDK 加载...");
         _dyld_register_func_for_add_image(kakaSDKImageCallback);
     }
     
     // 5. 启动定时器重试（保底）
     _startRetryTimer();
+    KLOG("✅ 初始化完成");
 }
