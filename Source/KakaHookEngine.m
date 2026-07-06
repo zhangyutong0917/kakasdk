@@ -79,21 +79,45 @@ static NSString *g_savedCard = nil;
 static uintptr_t g_kakaSDKBase = 0;
 
 // ==========================================
-// ★ 日志写入文件（使用 fprintf 避免 iOS 隐私保护）
+// ★ 日志系统：存储到 NSUserDefaults（沙盒允许）
 // ==========================================
-static void _writeLog(const char *format, ...) {
-    FILE *file = fopen("/tmp/KKEngine.log", "a");
-    if (!file) return;
-    
-    va_list args;
-    va_start(args, format);
-    vfprintf(file, format, args);
-    fprintf(file, "\n");
-    va_end(args);
-    fclose(file);
+static NSMutableArray *_getLogArray(void) {
+    static NSMutableArray *logs = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSData *data = [[NSUserDefaults standardUserDefaults] objectForKey:@"kkengine_logs"];
+        if (data) {
+            logs = [NSKeyedUnarchiver unarchiveObjectWithData:data];
+        }
+        if (!logs) {
+            logs = [NSMutableArray array];
+        }
+    });
+    return logs;
 }
 
-#define KLOG(fmt, ...) _writeLog("[KKEngine] " fmt, ##__VA_ARGS__)
+static void _saveLogs(void) {
+    NSData *data = [NSKeyedArchiver archivedDataWithRootObject:_getLogArray()];
+    [[NSUserDefaults standardUserDefaults] setObject:data forKey:@"kkengine_logs"];
+}
+
+static void _addLog(NSString *msg) {
+    NSArray *parts = [msg componentsSeparatedByString:@"\n"];
+    for (NSString *part in parts) {
+        if (part.length > 0) {
+            [_getLogArray() addObject:part];
+        }
+    }
+    // 只保留最近 500 条
+    if (_getLogArray().count > 500) {
+        [_getLogArray() removeObjectsInRange:NSMakeRange(0, _getLogArray().count - 500)];
+    }
+    _saveLogs();
+    // 同时输出到系统日志
+    NSLog(@"%@", msg);
+}
+
+#define KLOG(fmt, ...) _addLog([NSString stringWithFormat:@"[KKEngine] " fmt, ##__VA_ARGS__])
 
 // ==========================================
 // 前向声明
@@ -509,12 +533,12 @@ static void _hookPresentViewController(void) {
             NSString *title = alert.title ?: @"";
             NSString *message = alert.message ?: @"";
             
-            KLOG("🔍 presentViewController: title='%s' message='%s'", title.UTF8String, message.UTF8String);
+            KLOG("🔍 presentViewController: title='%@' message='%@'", title, message);
             
             if ([title containsString:@"激活"] || [title containsString:@"授权"] || [title containsString:@"验证"] ||
                 [message containsString:@"激活"] || [message containsString:@"授权"] || [message containsString:@"验证"] ||
                 [message containsString:@"卡密"] || [title containsString:@"卡密"]) {
-                KLOG("🚫 拦截 KakaSDK 弹窗：title='%s' message='%s'", title.UTF8String, message.UTF8String);
+                KLOG("🚫 拦截 KakaSDK 弹窗：title='%@' message='%@'", title, message);
                 if (completion) completion();
                 return; // 直接丢弃，不显示
             }
@@ -539,7 +563,7 @@ static void fake_makeKeyAndVisible(id self, SEL _cmd) {
         // 可能是 KakaSDK 的弹窗窗口，检查其内容
         if (window.rootViewController) {
             NSString *vcClass = NSStringFromClass([window.rootViewController class]);
-            KLOG("🔍 UIWindow makeKeyAndVisible: %@ (level=%.0f)", vcClass.UTF8String, window.windowLevel);
+            KLOG("🔍 UIWindow makeKeyAndVisible: %@ (level=%.0f)", vcClass, window.windowLevel);
             
             // 如果是 UIAlertController 或类似弹窗，拦截
             if ([vcClass containsString:@"Alert"] || [vcClass containsString:@"Dialog"]) {
@@ -734,6 +758,37 @@ static UIAlertController *_createActivationAlert(NSString *errorMsg, id verifier
                 }
             }
         }];
+    }]];
+    
+    [alert addAction:[UIAlertAction actionWithTitle:@"查看日志" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSMutableArray *logs = _getLogArray();
+        NSString *logText = [logs componentsJoinedByString:@"\n"];
+        if (logText.length == 0) {
+            logText = @"(无日志)";
+        }
+        
+        UIAlertController *logAlert = [UIAlertController
+            alertControllerWithTitle:@"KKEngine 日志"
+            message:logText
+            preferredStyle:UIAlertControllerStyleAlert];
+        
+        [logAlert addAction:[UIAlertAction actionWithTitle:@"复制日志" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            [UIPasteboard generalPasteboard].string = logText;
+        }]];
+        
+        [logAlert addAction:[UIAlertAction actionWithTitle:@"清除日志" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+            [_getLogArray() removeAllObjects];
+            _saveLogs();
+        }]];
+        
+        [logAlert addAction:[UIAlertAction actionWithTitle:@"关闭" style:UIAlertActionStyleCancel handler:nil]];
+        
+        for (UIWindow *w in [UIApplication sharedApplication].windows) {
+            if (w.windowLevel > UIWindowLevelNormal && w.rootViewController) {
+                [w.rootViewController presentViewController:logAlert animated:YES completion:nil];
+                break;
+            }
+        }
     }]];
     
     [alert addAction:[UIAlertAction actionWithTitle:@"清除卡密" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
@@ -991,7 +1046,7 @@ static void kakaHookEngine_init(void) {
     KLOG("🔍 开始查找 KakaSDK...");
     _findKakaSDK();
     if (g_kakaSDKBase != 0) {
-        KLOG("✓ KakaSDK 已找到，基地址: 0x%lx", (unsigned long)g_kakaSDKBase);
+        KLOG("✓ KakaSDK 已找到，基地址: %p", (void *)g_kakaSDKBase);
         // 延迟 0.1 秒再执行，确保 KakaSDK 内存完全映射
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             KLOG("⏱ 开始执行 Patch...");
