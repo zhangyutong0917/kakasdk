@@ -418,7 +418,18 @@ static void _findKakaSDK(void) {
     
     for (uint32_t i = 0; i < _dyld_image_count(); i++) {
         const char *name = _dyld_get_image_name(i);
-        if (name && (strstr(name, "KakaSDK") || strstr(name, "kaka") || strstr(name, "Kaka"))) {
+        if (!name) continue;
+        
+        // ★ 精确匹配：只匹配 KakaSDK.dylib，不匹配主程序 kaka.app ★
+        const char *basename = strrchr(name, '/');
+        if (basename) {
+            basename++; // 跳过 '/'
+        } else {
+            basename = name;
+        }
+        
+        // 检查文件名是否以 "KakaSDK" 开头（匹配 KakaSDK.dylib）
+        if (strncmp(basename, "KakaSDK", 7) == 0) {
             const struct mach_header *header = _dyld_get_image_header(i);
             g_kakaSDKBase = (uintptr_t)header;
             NSLog(@"[KKEngine] ✓ 找到 KakaSDK: %s", name);
@@ -792,7 +803,17 @@ static void _doMainLogic(void) {
 // ==========================================
 static void kakaSDKImageCallback(const struct mach_header *header, intptr_t slide) {
     const char *name = _dyld_get_image_name(_dyld_image_count() - 1);
-    if (name && (strstr(name, "KakaSDK") || strstr(name, "kaka") || strstr(name, "Kaka"))) {
+    if (!name) return;
+    
+    // ★ 精确匹配：只匹配 KakaSDK.dylib ★
+    const char *basename = strrchr(name, '/');
+    if (basename) {
+        basename++;
+    } else {
+        basename = name;
+    }
+    
+    if (strncmp(basename, "KakaSDK", 7) == 0) {
         NSLog(@"[KKEngine] ✓ KakaSDK 已加载 (callback): %s", name);
         g_kakaSDKBase = (uintptr_t)header;
         

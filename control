@@ -1,8 +1,8 @@
 Package: com.kkengine.inject
 Name: KKEngine
-Version: 6.0.0
+Version: 7.0.0
 Architecture: iphoneos-arm
-Description: KKEngine v6 - 安全启动（延迟Patch）+ 弹窗独立 + 三重防御
+Description: KKEngine v7 - 修复基地址匹配错误（精确匹配 KakaSDK.dylib）
 Maintainer: KKEngine Team
 Author: KKEngine Team
 Depends: firmware (>= 16.0)
