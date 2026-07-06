@@ -738,6 +738,12 @@ static UITextField *g_cardTextField = nil;
             if (success && [data[@"status"] isEqualToString:@"active"]) {
                 KLOG("✅ 验证通过");
                 _onVerificationPassed(data, card);
+                
+                // ★ 关闭目标插件的弹窗 ★
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                    [self _dismissTargetPluginAlerts];
+                });
+                
                 [g_alertWindow setHidden:YES];
                 g_alertWindow = nil;
             } else {
@@ -809,6 +815,88 @@ static UITextField *g_cardTextField = nil;
 
 - (void)onExit {
     exit(0);
+}
+
+// ★ 关闭目标插件的弹窗 ★
+- (void)_dismissTargetPluginAlerts {
+    KLOG("🔍 开始关闭目标插件弹窗...");
+    
+    UIApplication *app = [UIApplication sharedApplication];
+    int dismissedCount = 0;
+    
+    for (UIWindow *window in app.windows) {
+        // 跳过我们的窗口
+        if (window == g_alertWindow) continue;
+        
+        // 检查窗口层级（目标插件弹窗通常层级较高）
+        if (window.windowLevel > UIWindowLevelNormal) {
+            KLOG("🔍 发现高层级窗口: level=%.0f, class=%@", 
+                 window.windowLevel, NSStringFromClass([window class]));
+            
+            // 检查窗口内容
+            if (window.rootViewController) {
+                UIViewController *vc = window.rootViewController;
+                NSString *vcClass = NSStringFromClass([vc class]);
+                KLOG("🔍 窗口 ViewController: %@", vcClass);
+                
+                // 如果是 UIAlertController 或包含关键词，关闭它
+                if ([vcClass containsString:@"Alert"] || 
+                    [vcClass containsString:@"Dialog"] ||
+                    [vcClass containsString:@"Popup"]) {
+                    KLOG("🚫 关闭疑似目标弹窗窗口: %@", vcClass);
+                    [window setHidden:YES];
+                    dismissedCount++;
+                }
+                
+                // 检查 presentedViewController
+                if (vc.presentedViewController) {
+                    NSString *presentedClass = NSStringFromClass([vc.presentedViewController class]);
+                    KLOG("🔍 presentedViewController: %@", presentedClass);
+                    
+                    if ([presentedClass containsString:@"Alert"] ||
+                        [presentedClass containsString:@"Dialog"] ||
+                        [presentedClass containsString:@"Popup"]) {
+                        KLOG("🚫 关闭 presentedViewController: %@", presentedClass);
+                        [vc dismissViewControllerAnimated:NO completion:nil];
+                        dismissedCount++;
+                    }
+                }
+            }
+        }
+    }
+    
+    // 也检查主窗口的 presentedViewController
+    for (UIWindow *window in app.windows) {
+        if (window == g_alertWindow) continue;
+        if (window.isKeyWindow || window.windowLevel == UIWindowLevelNormal) {
+            if (window.rootViewController.presentedViewController) {
+                UIViewController *presented = window.rootViewController.presentedViewController;
+                NSString *presentedClass = NSStringFromClass([presented class]);
+                KLOG("🔍 主窗口 presentedViewController: %@", presentedClass);
+                
+                // 检查是否是 UIAlertController
+                if ([presented isKindOfClass:[UIAlertController class]]) {
+                    UIAlertController *alert = (UIAlertController *)presented;
+                    NSString *title = alert.title ?: @"";
+                    NSString *message = alert.message ?: @"";
+                    
+                    KLOG("🔍 Alert title='%@' message='%@'", title, message);
+                    
+                    // 如果包含卡密相关关键词，关闭它
+                    if ([title containsString:@"激活"] || [title containsString:@"授权"] || 
+                        [title containsString:@"验证"] || [title containsString:@"卡密"] ||
+                        [message containsString:@"激活"] || [message containsString:@"授权"] ||
+                        [message containsString:@"验证"] || [message containsString:@"卡密"]) {
+                        KLOG("🚫 关闭目标插件卡密弹窗");
+                        [window.rootViewController dismissViewControllerAnimated:NO completion:nil];
+                        dismissedCount++;
+                    }
+                }
+            }
+        }
+    }
+    
+    KLOG("✅ 关闭目标弹窗完成，共关闭 %d 个", dismissedCount);
 }
 
 @end
