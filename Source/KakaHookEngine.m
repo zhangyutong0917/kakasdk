@@ -796,10 +796,9 @@ static void kakaSDKImageCallback(const struct mach_header *header, intptr_t slid
         NSLog(@"[KKEngine] ✓ KakaSDK 已加载 (callback): %s", name);
         g_kakaSDKBase = (uintptr_t)header;
         
-        // ★ 关键：立即同步 Patch（在 dyld 加载线程上，比 KakaSDK 的 InitFunc 更早执行）★
-        _patchAuthOnly();
-        
-        dispatch_async(dispatch_get_main_queue(), ^{
+        // ★ 安全启动：延迟执行 Patch，确保 KakaSDK 内存完全映射 ★
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            _patchAuthOnly();
             _doMainLogic();
         });
     }
@@ -848,7 +847,7 @@ static void _startRetryTimer(void) {
 __attribute__((constructor))
 static void kakaHookEngine_init(void) {
     NSLog(@"[KKEngine] ========================================");
-    NSLog(@"[KKEngine] KKEngine v5 Loaded (弹窗独立 + 三重防御)");
+    NSLog(@"[KKEngine] KKEngine v6 Loaded (安全启动 + 弹窗独立)");
     NSLog(@"[KKEngine] 第一层：预Patch认证标志（抑制KakaSDK弹窗）");
     NSLog(@"[KKEngine] 第二层：最高层级弹窗（UIWindowLevelStatusBar+100）");
     NSLog(@"[KKEngine] 第三层：Hook拦截presentViewController（兜底）");
@@ -870,12 +869,16 @@ static void kakaHookEngine_init(void) {
         });
     });
     
-    // 4. 立即尝试查找和 Patch
+    // 4. ★ 安全启动：不在 constructor 中直接调用 _activateAll ★
+    // 让 Patch 操作延迟到 KakaSDK 完全加载后
     _findKakaSDK();
     if (g_kakaSDKBase != 0) {
-        _patchAuthOnly();  // ★ 第一层防御：立即同步 Patch ★
-        NSLog(@"[KKEngine] ✓ KakaSDK 已存在，立即同步 Patch");
-        _doMainLogic();
+        NSLog(@"[KKEngine] ✓ KakaSDK 已存在，延迟执行 Patch（等待内存就绪）");
+        // 延迟 0.1 秒再执行，确保 KakaSDK 内存完全映射
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            _patchAuthOnly();
+            _doMainLogic();
+        });
     } else {
         NSLog(@"[KKEngine]  等待 KakaSDK 加载...");
         _dyld_register_func_for_add_image(kakaSDKImageCallback);
