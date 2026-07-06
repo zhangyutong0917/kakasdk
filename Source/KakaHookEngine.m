@@ -165,6 +165,9 @@ static NSString *_getPersistentDeviceID(void) {
 // ==========================================
 // ★ 关键：写入 KakaSDK 期望的 Keychain 格式
 // ==========================================
+// KakaSDK 期望的 Keychain 账户名（从逆向报告获取）
+#define KAKA_KEYCHAIN_ACCOUNT @".kaka.lock.00000000333F3E99"
+
 static void _writeKakaAuthToKeychain(NSString *cardCode) {
     // 构造 KakaSDK 期望的 JSON 结构
     long ts = (long)[[NSDate date] timeIntervalSince1970];
@@ -179,30 +182,30 @@ static void _writeKakaAuthToKeychain(NSString *cardCode) {
     NSError *err;
     NSData *jsonData = [NSJSONSerialization dataWithJSONObject:authDict options:0 error:&err];
     if (err || !jsonData) {
-        NSLog(@"[KKEngine] ❌ JSON 序列化失败");
+        KLOG("❌ JSON 序列化失败");
         return;
     }
     
-    // 写入 Keychain
+    // 写入 Keychain（使用 KakaSDK 期望的账户名）
     NSDictionary *deleteQuery = @{
         (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
         (__bridge id)kSecAttrService: KEYCHAIN_SERVICE,
-        (__bridge id)kSecAttrAccount: @"auth_data"
+        (__bridge id)kSecAttrAccount: KAKA_KEYCHAIN_ACCOUNT
     };
     SecItemDelete((__bridge CFDictionaryRef)deleteQuery);
     
     NSDictionary *addQuery = @{
         (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
         (__bridge id)kSecAttrService: KEYCHAIN_SERVICE,
-        (__bridge id)kSecAttrAccount: @"auth_data",
+        (__bridge id)kSecAttrAccount: KAKA_KEYCHAIN_ACCOUNT,
         (__bridge id)kSecValueData: jsonData,
         (__bridge id)kSecAttrAccessible: (__bridge id)kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
     };
     OSStatus status = SecItemAdd((__bridge CFDictionaryRef)addQuery, NULL);
     if (status == errSecSuccess) {
-        NSLog(@"[KKEngine] ✅ 已写入 KakaSDK 认证数据到 Keychain");
+        KLOG("✅ 已写入 KakaSDK 认证数据到 Keychain (account: %@)", KAKA_KEYCHAIN_ACCOUNT);
     } else {
-        NSLog(@"[KKEngine] ❌ Keychain 写入失败: %d", (int)status);
+        KLOG("❌ Keychain 写入失败: %d", (int)status);
     }
 }
 
