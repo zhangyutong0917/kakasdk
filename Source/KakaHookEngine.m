@@ -33,6 +33,7 @@ typedef char *caddr_t;
 // KakaSDK 关键地址（IDA 虚拟地址）
 // ==========================================
 #define KAKA_AUTH_PASSED_VA     0x1417958   // dword_1417958: 验证通过标志
+#define KAKA_TAMPER_FLAG_VA     0x141795C   // dword_141795C: 防篡改标志（1=检测到篡改，悬浮按钮会被隐藏）
 #define KAKA_DATA_PTR_VA        0x1417D88   // qword_1417D88: 数据指针（必须非零）
 #define KAKA_INIT_FUNC_VA       0x325BC     // InitFunc_0: 初始化函数
 #define KAKA_VERIFY_FUNC_VA     0x32818     // sub_32818: 验证函数
@@ -413,15 +414,19 @@ static void _activateAll(void) {
     
     // 计算运行时地址
     uintptr_t authPassedAddr = g_kakaSDKBase + KAKA_AUTH_PASSED_VA;
+    uintptr_t tamperFlagAddr = g_kakaSDKBase + KAKA_TAMPER_FLAG_VA;
     uintptr_t dataPtrAddr = g_kakaSDKBase + KAKA_DATA_PTR_VA;
     
     KLOG("dword_1417958 地址：0x%lx", authPassedAddr);
+    KLOG("dword_141795C 地址：0x%lx", tamperFlagAddr);
     KLOG("qword_1417D88 地址：0x%lx", dataPtrAddr);
     
     // 读取当前值
     uint32_t currentAuth = *(uint32_t *)authPassedAddr;
+    uint32_t currentTamper = *(uint32_t *)tamperFlagAddr;
     uint64_t currentData = *(uint64_t *)dataPtrAddr;
     KLOG("当前 dword_1417958 = %u", currentAuth);
+    KLOG("当前 dword_141795C = %u (防篡改标志)", currentTamper);
     KLOG("当前 qword_1417D88 = 0x%llx", (unsigned long long)currentData);
     
     // Patch dword_1417958 = 1 (验证通过)
@@ -430,6 +435,19 @@ static void _activateAll(void) {
         KLOG("✅ dword_1417958 已设置为 1");
     } else {
         KLOG("❌ 无法修改 dword_1417958");
+    }
+    
+    // ★ 关键：清除防篡改标志 dword_141795C = 0 ★
+    // 如果此标志非零，悬浮按钮会被强制隐藏
+    if (currentTamper != 0) {
+        if (_setMemoryWritable((void *)tamperFlagAddr, sizeof(uint32_t))) {
+            *(uint32_t *)tamperFlagAddr = 0;
+            KLOG("✅ dword_141795C 已清除为 0 (防篡改标志)");
+        } else {
+            KLOG(" 无法修改 dword_141795C");
+        }
+    } else {
+        KLOG("✓ dword_141795C 已经为 0");
     }
     
     // Patch qword_1417D88 - 确保非零
@@ -446,8 +464,9 @@ static void _activateAll(void) {
     
     // 验证
     uint32_t newAuth = *(uint32_t *)authPassedAddr;
+    uint32_t newTamper = *(uint32_t *)tamperFlagAddr;
     uint64_t newData = *(uint64_t *)dataPtrAddr;
-    KLOG("验证：dword_1417958 = %u, qword_1417D88 = 0x%llx", newAuth, (unsigned long long)newData);
+    KLOG("验证：dword_1417958 = %u, dword_141795C = %u, qword_1417D88 = 0x%llx", newAuth, newTamper, (unsigned long long)newData);
     
     if (newAuth == 1 && newData != 0) {
         g_verificationPassed = YES;
@@ -494,12 +513,13 @@ static void _findKakaSDK(void) {
 }
 
 // ==========================================
-// ★ 第一层防御：预Patch认证标志（同步执行，不等网络）
+// ★ 第一层防御：预 Patch 认证标志（同步执行，不等网络）
 // ==========================================
 static void _patchAuthOnly(void) {
     if (g_kakaSDKBase == 0) return;
     
     uintptr_t authPassedAddr = g_kakaSDKBase + KAKA_AUTH_PASSED_VA;
+    uintptr_t tamperFlagAddr = g_kakaSDKBase + KAKA_TAMPER_FLAG_VA;
     uintptr_t dataPtrAddr = g_kakaSDKBase + KAKA_DATA_PTR_VA;
     
     // Patch dword_1417958 = 1（让 KakaSDK 认为已授权，抑制弹窗逻辑）
@@ -507,7 +527,18 @@ static void _patchAuthOnly(void) {
         *(uint32_t *)authPassedAddr = 1;
         KLOG("✅ 认证标志已预置 (dword_1417958=1)，KakaSDK 弹窗已被抑制");
     } else {
-        KLOG("❌ 预Patch dword_1417958 失败");
+        KLOG("❌ 预 Patch dword_1417958 失败");
+    }
+    
+    // ★ 清除防篡改标志 dword_141795C = 0 ★
+    uint32_t currentTamper = *(uint32_t *)tamperFlagAddr;
+    if (currentTamper != 0) {
+        if (_setMemoryWritable((void *)tamperFlagAddr, sizeof(uint32_t))) {
+            *(uint32_t *)tamperFlagAddr = 0;
+            KLOG("✅ 防篡改标志已清除 (dword_141795C=0)");
+        } else {
+            KLOG("❌ 预 Patch dword_141795C 失败");
+        }
     }
     
     // Patch qword_1417D88 != 0
@@ -1205,9 +1236,8 @@ static void kakaHookEngine_init(void) {
     remove("/tmp/KKEngine.log");
     
     KLOG("========================================");
-    KLOG("KKEngine v20 Loaded (精确区分窗口类型)");
-    KLOG("放行: KKEngine弹窗, KakaPassthroughWindow");
-    KLOG("拦截: 验证弹窗(有输入框+验证文本)");
+    KLOG("KKEngine v21 Loaded (清除防篡改标志)");
+    KLOG("Patch: dword_1417958=1, dword_141795C=0, qword_1417D88!=0");
     KLOG("========================================");
     
     // 1. Hook ptrace（反调试）
