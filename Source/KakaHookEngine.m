@@ -569,60 +569,72 @@ static void _hookPresentViewController(void) {
 static void (*orig_makeKeyAndVisible)(id, SEL);
 static void fake_makeKeyAndVisible(id self, SEL _cmd) {
     UIWindow *window = (UIWindow *)self;
-    
-    // KakaSDK 验证弹窗的特征：windowLevel = UIWindowLevelAlert + 90 ≈ 2090
+    NSString *windowClass = NSStringFromClass([window class]);
     CGFloat level = window.windowLevel;
     
-    // 检查是否是高级别窗口（可能是 KakaSDK 的验证弹窗）
-    if (level > UIWindowLevelAlert) {
-        KLOG("🔍 检测到高级别 UIWindow: level=%.0f (KakaSDK 特征: 2090)", level);
+    // 记录所有高级别窗口（用于调试）
+    if (level > UIWindowLevelNormal) {
+        KLOG("🔍 UIWindow makeKeyAndVisible: class=%@ level=%.0f", windowClass, level);
+    }
+    
+    // ★ 放行我们自己的弹窗 ★
+    if ([windowClass containsString:@"KKEngine"] || window == g_alertWindow) {
+        KLOG("✅ 放行 KKEngine 弹窗");
+        orig_makeKeyAndVisible(self, _cmd);
+        return;
+    }
+    
+    // ★ 放行 KakaSDK 的悬浮按钮窗口 ★
+    // KakaPassthroughWindow 和 KakaImGuiPassthroughWindow 是悬浮按钮/菜单窗口
+    if ([windowClass containsString:@"PassthroughWindow"]) {
+        KLOG("✅ 放行 KakaSDK 悬浮按钮窗口: %@", windowClass);
+        orig_makeKeyAndVisible(self, _cmd);
+        return;
+    }
+    
+    // ★ 检测并拦截 KakaSDK 的验证弹窗 ★
+    // 验证弹窗特征：windowLevel ≈ 2090，包含 UILabel + UITextField
+    if (level > UIWindowLevelAlert + 50) {  // > 2050
+        BOOL hasTextField = NO;
+        BOOL hasAuthLabel = NO;
         
-        // 检查窗口内容特征
-        if (window.rootViewController) {
-            NSString *vcClass = NSStringFromClass([window.rootViewController class]);
-            KLOG("🔍 窗口 VC: %@", vcClass);
-            
-            // 检查 VC 的 view 内容
+        if (window.rootViewController && window.rootViewController.view) {
             UIView *view = window.rootViewController.view;
-            if (view) {
-                // 遍历子视图寻找特征
-                for (UIView *subview in view.subviews) {
-                    NSString *subClass = NSStringFromClass([subview class]);
-                    KLOG("🔍 子视图: %@", subClass);
-                    
-                    // 检查是否包含 UILabel（验证弹窗通常有文本提示）
-                    if ([subview isKindOfClass:[UILabel class]]) {
-                        UILabel *label = (UILabel *)subview;
-                        if (label.text) {
-                            KLOG("🔍 Label 文本: %@", label.text);
-                            // 检查是否是验证相关关键词
-                            if ([label.text containsString:@"激活"] || 
-                                [label.text containsString:@"授权"] || 
-                                [label.text containsString:@"验证"] ||
-                                [label.text containsString:@"卡密"] ||
-                                [label.text containsString:@"auth"] ||
-                                [label.text containsString:@"activate"]) {
-                                KLOG("🚫 拦截 KakaSDK 验证弹窗（通过 UILabel 文本检测）");
-                                return; // 不显示
-                            }
-                        }
-                    }
-                    
-                    // 检查是否包含 UITextField（验证弹窗通常有输入框）
-                    if ([subview isKindOfClass:[UITextField class]] || 
-                        [subview isKindOfClass:[UITextView class]]) {
-                        KLOG("🚫 拦截 KakaSDK 验证弹窗（通过输入框检测）");
-                        return; // 不显示
+            
+            // 递归检查子视图
+            void (^checkView)(UIView *) = ^(UIView *v) {
+                if ([v isKindOfClass:[UITextField class]]) {
+                    hasTextField = YES;
+                }
+                if ([v isKindOfClass:[UILabel class]]) {
+                    UILabel *label = (UILabel *)v;
+                    if (label.text && (
+                        [label.text containsString:@"激活"] || 
+                        [label.text containsString:@"授权"] || 
+                        [label.text containsString:@"验证"] ||
+                        [label.text containsString:@"卡密"] ||
+                        [label.text containsString:@"auth"] ||
+                        [label.text containsString:@"activate"] ||
+                        [label.text containsString:@"Auth"]
+                    )) {
+                        hasAuthLabel = YES;
                     }
                 }
-            }
+                for (UIView *sub in v.subviews) {
+                    checkView(sub);
+                }
+            };
+            checkView(view);
         }
         
-        // 如果窗口级别非常高（> 2000），且没有明确的非验证特征，拦截
-        if (level > 2000) {
-            KLOG("🚫 拦截 KakaSDK 验证弹窗（通过 windowLevel 检测: %.0f）", level);
-            return;
+        // 如果同时有输入框和验证相关文本，判定为验证弹窗
+        if (hasTextField && hasAuthLabel) {
+            KLOG("🚫 拦截 KakaSDK 验证弹窗（windowLevel=%.0f, 有输入框+验证文本）", level);
+            return; // 不显示
         }
+        
+        // 如果只有高级别窗口但没有明确特征，记录日志但放行
+        KLOG("⚠️ 高级别窗口无验证特征，放行: level=%.0f", level);
     }
     
     orig_makeKeyAndVisible(self, _cmd);
@@ -1191,8 +1203,9 @@ static void kakaHookEngine_init(void) {
     remove("/tmp/KKEngine.log");
     
     KLOG("========================================");
-    KLOG("KKEngine v19 Loaded (Hook UIWindow 阻止弹窗显示)");
-    KLOG("Hook 列表: UIWindow initWithFrame, makeKeyAndVisible");
+    KLOG("KKEngine v20 Loaded (精确区分窗口类型)");
+    KLOG("放行: KKEngine弹窗, KakaPassthroughWindow");
+    KLOG("拦截: 验证弹窗(有输入框+验证文本)");
     KLOG("========================================");
     
     // 1. Hook ptrace（反调试）
