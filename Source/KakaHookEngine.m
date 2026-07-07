@@ -567,6 +567,7 @@ static void _hookPresentViewController(void) {
 // ★ 扩展 Hook：拦截 UIWindow makeKeyAndVisible
 // ==========================================
 static void (*orig_makeKeyAndVisible)(id, SEL);
+static UIWindow *g_alertWindow = nil;
 
 // 递归检查视图的辅助函数
 static BOOL _viewHasAuthFeatures(UIView *view) {
@@ -685,7 +686,6 @@ static void _hookSendEvent(void) {
 // ==========================================
 // ★ 自定义弹窗视图（不依赖 UIAlertController）
 // ==========================================
-static UIWindow *g_alertWindow = nil;
 static UITextField *g_cardTextField = nil;
 
 @interface KKEngineAlertView : UIView
