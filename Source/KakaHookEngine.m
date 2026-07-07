@@ -476,6 +476,76 @@ static void _activateAll(void) {
         KLOG("准备调用 InitFunc_0...");
         _callInitFunc();
         
+        // ★ 关键：强制显示 KakaSDK 悬浮按钮 ★
+        // 由于我们提前 Patch 了认证标志，KakaSDK 可能跳过了悬浮按钮的创建/显示
+        // 需要手动遍历窗口找到 KakaPassthroughWindow 并强制显示
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            KLOG("🔍 开始查找并显示 KakaSDK 悬浮按钮...");
+            BOOL found = NO;
+            for (UIWindow *window in [UIApplication sharedApplication].windows) {
+                NSString *cls = NSStringFromClass([window class]);
+                KLOG("  窗口: %@ level=%.0f", cls, window.windowLevel);
+                
+                // 查找 KakaPassthroughWindow 或 KakaImGuiPassthroughWindow
+                if ([cls containsString:@"PassthroughWindow"]) {
+                    KLOG("✅ 找到 KakaSDK 悬浮按钮窗口: %@", cls);
+                    
+                    // 强制显示窗口
+                    [window setHidden:NO];
+                    [window setAlpha:1.0];
+                    [window setUserInteractionEnabled:YES];
+                    [window makeKeyAndVisible];
+                    KLOG("✅ 窗口已显示");
+                    
+                    // 遍历窗口的子视图，强制显示所有隐藏的元素
+                    if (window.rootViewController && window.rootViewController.view) {
+                        UIView *mainView = window.rootViewController.view;
+                        for (UIView *subview in mainView.subviews) {
+                            NSString *subCls = NSStringFromClass([subview class]);
+                            KLOG("  子视图: %@ hidden=%d alpha=%.1f", subCls, subview.isHidden, subview.alpha);
+                            [subview setHidden:NO];
+                            [subview setAlpha:1.0];
+                            [subview setUserInteractionEnabled:YES];
+                            
+                            // 递归显示子视图的子视图
+                            for (UIView *grandchild in subview.subviews) {
+                                [grandchild setHidden:NO];
+                                [grandchild setAlpha:1.0];
+                                [grandchild setUserInteractionEnabled:YES];
+                            }
+                        }
+                    }
+                    found = YES;
+                }
+            }
+            
+            if (!found) {
+                KLOG("️ 未找到 KakaPassthroughWindow，悬浮按钮可能尚未创建");
+                // 延迟再次尝试
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    KLOG("🔄 第二次尝试查找悬浮按钮...");
+                    for (UIWindow *window in [UIApplication sharedApplication].windows) {
+                        NSString *cls = NSStringFromClass([window class]);
+                        if ([cls containsString:@"PassthroughWindow"]) {
+                            KLOG("✅ 第二次找到: %@", cls);
+                            [window setHidden:NO];
+                            [window setAlpha:1.0];
+                            [window makeKeyAndVisible];
+                            if (window.rootViewController && window.rootViewController.view) {
+                                for (UIView *subview in window.rootViewController.view.subviews) {
+                                    [subview setHidden:NO];
+                                    [subview setAlpha:1.0];
+                                    [subview setUserInteractionEnabled:YES];
+                                }
+                            }
+                            return;
+                        }
+                    }
+                    KLOG("❌ 第二次仍未找到悬浮按钮窗口");
+                });
+            }
+        });
+        
         KLOG("========================================");
     } else {
         KLOG("  Patch 失败，值未正确设置");
@@ -1236,7 +1306,7 @@ static void kakaHookEngine_init(void) {
     remove("/tmp/KKEngine.log");
     
     KLOG("========================================");
-    KLOG("KKEngine v21 Loaded (清除防篡改标志)");
+    KLOG("KKEngine v22 Loaded (强制显示悬浮按钮)");
     KLOG("Patch: dword_1417958=1, dword_141795C=0, qword_1417D88!=0");
     KLOG("========================================");
     
