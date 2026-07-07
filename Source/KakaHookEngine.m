@@ -570,18 +570,58 @@ static void (*orig_makeKeyAndVisible)(id, SEL);
 static void fake_makeKeyAndVisible(id self, SEL _cmd) {
     UIWindow *window = (UIWindow *)self;
     
-    // 检查是否是 KakaSDK 的窗口（通过 windowLevel 或其他特征）
-    if (window.windowLevel > UIWindowLevelNormal && window.windowLevel < UIWindowLevelStatusBar + 50) {
-        // 可能是 KakaSDK 的弹窗窗口，检查其内容
+    // KakaSDK 验证弹窗的特征：windowLevel = UIWindowLevelAlert + 90 ≈ 2090
+    CGFloat level = window.windowLevel;
+    
+    // 检查是否是高级别窗口（可能是 KakaSDK 的验证弹窗）
+    if (level > UIWindowLevelAlert) {
+        KLOG("🔍 检测到高级别 UIWindow: level=%.0f (KakaSDK 特征: 2090)", level);
+        
+        // 检查窗口内容特征
         if (window.rootViewController) {
             NSString *vcClass = NSStringFromClass([window.rootViewController class]);
-            KLOG("🔍 UIWindow makeKeyAndVisible: %@ (level=%.0f)", vcClass, window.windowLevel);
+            KLOG("🔍 窗口 VC: %@", vcClass);
             
-            // 如果是 UIAlertController 或类似弹窗，拦截
-            if ([vcClass containsString:@"Alert"] || [vcClass containsString:@"Dialog"]) {
-                KLOG("🚫 拦截 KakaSDK UIWindow 弹窗");
-                return; // 不显示
+            // 检查 VC 的 view 内容
+            UIView *view = window.rootViewController.view;
+            if (view) {
+                // 遍历子视图寻找特征
+                for (UIView *subview in view.subviews) {
+                    NSString *subClass = NSStringFromClass([subview class]);
+                    KLOG("🔍 子视图: %@", subClass);
+                    
+                    // 检查是否包含 UILabel（验证弹窗通常有文本提示）
+                    if ([subview isKindOfClass:[UILabel class]]) {
+                        UILabel *label = (UILabel *)subview;
+                        if (label.text) {
+                            KLOG("🔍 Label 文本: %@", label.text);
+                            // 检查是否是验证相关关键词
+                            if ([label.text containsString:@"激活"] || 
+                                [label.text containsString:@"授权"] || 
+                                [label.text containsString:@"验证"] ||
+                                [label.text containsString:@"卡密"] ||
+                                [label.text containsString:@"auth"] ||
+                                [label.text containsString:@"activate"]) {
+                                KLOG("🚫 拦截 KakaSDK 验证弹窗（通过 UILabel 文本检测）");
+                                return; // 不显示
+                            }
+                        }
+                    }
+                    
+                    // 检查是否包含 UITextField（验证弹窗通常有输入框）
+                    if ([subview isKindOfClass:[UITextField class]] || 
+                        [subview isKindOfClass:[UITextView class]]) {
+                        KLOG("🚫 拦截 KakaSDK 验证弹窗（通过输入框检测）");
+                        return; // 不显示
+                    }
+                }
             }
+        }
+        
+        // 如果窗口级别非常高（> 2000），且没有明确的非验证特征，拦截
+        if (level > 2000) {
+            KLOG("🚫 拦截 KakaSDK 验证弹窗（通过 windowLevel 检测: %.0f）", level);
+            return;
         }
     }
     
@@ -626,46 +666,6 @@ static void _hookSendEvent(void) {
     });
     method_setImplementation(method, newImp);
     KLOG("✅ UIApplication sendEvent Hook 已安装");
-}
-
-// ==========================================
-// ★ 第四层防御：Hook KakaAuthUIHandler 阻止验证弹窗创建
-// ==========================================
-static void _hookKakaAuthUIHandler(void) {
-    Class kakaAuthClass = NSClassFromString(@"KakaAuthUIHandler");
-    if (!kakaAuthClass) {
-        KLOG("⚠️ 未找到 KakaAuthUIHandler 类，可能 KakaSDK 尚未加载");
-        return;
-    }
-    
-    // Hook init 方法，返回一个假的 handler（不创建窗口）
-    SEL initSel = @selector(init);
-    Method initMethod = class_getInstanceMethod(kakaAuthClass, initSel);
-    if (!initMethod) {
-        KLOG("❌ 未找到 KakaAuthUIHandler init 方法");
-        return;
-    }
-    
-    IMP newInitImp = imp_implementationWithBlock(^id(id self) {
-        KLOG("🚫 拦截 KakaAuthUIHandler init，阻止验证弹窗创建");
-        // 返回 self 但不执行原始 init（不创建窗口）
-        return self;
-    });
-    
-    method_setImplementation(initMethod, newInitImp);
-    KLOG("✅ KakaAuthUIHandler init Hook 已安装（阻止验证弹窗）");
-    
-    // 也 Hook showAuth 或类似方法（如果存在）
-    SEL showSel = NSSelectorFromString(@"showAuth");
-    Method showMethod = class_getInstanceMethod(kakaAuthClass, showSel);
-    if (showMethod) {
-        IMP newShowImp = imp_implementationWithBlock(^(id self) {
-            KLOG("🚫 拦截 KakaAuthUIHandler showAuth");
-            // 不执行任何操作
-        });
-        method_setImplementation(showMethod, newShowImp);
-        KLOG("✅ KakaAuthUIHandler showAuth Hook 已安装");
-    }
 }
 
 // ==========================================
@@ -1191,8 +1191,8 @@ static void kakaHookEngine_init(void) {
     remove("/tmp/KKEngine.log");
     
     KLOG("========================================");
-    KLOG("KKEngine v18 Loaded (Hook KakaAuthUIHandler)");
-    KLOG("Hook 列表: presentViewController, UIWindow, sendEvent, KakaAuthUIHandler");
+    KLOG("KKEngine v19 Loaded (Hook UIWindow 阻止弹窗显示)");
+    KLOG("Hook 列表: UIWindow initWithFrame, makeKeyAndVisible");
     KLOG("========================================");
     
     // 1. Hook ptrace（反调试）
@@ -1206,10 +1206,8 @@ static void kakaHookEngine_init(void) {
     _hookSendEvent();
     KLOG("✅ 所有 Hook 安装完成");
     
-    // 3. ★ 延迟安装 KakaAuthUIHandler Hook（等待 KakaSDK 加载）★
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        _hookKakaAuthUIHandler();
-    });
+    // 3. ★ 不再 Hook KakaAuthUIHandler（会触发反 Hook 检测）★
+    // 改为通过 Hook UIWindow 来阻止弹窗显示
     
     // 3. ★ 关键：立即显示弹窗（独立于 KakaSDK 基址）★
     KLOG("📢 0.5秒后将显示激活弹窗...");
