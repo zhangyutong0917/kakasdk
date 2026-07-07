@@ -1,8 +1,8 @@
 Package: com.kkengine.inject
 Name: KKEngine
-Version: 16.0.0
+Version: 17.0.0
 Architecture: iphoneos-arm
-Description: KKEngine v16 - 修复隐藏窗口逻辑，保留KakaSDK功能窗口
+Description: KKEngine v17 - 移除主动关闭弹窗逻辑，完全依赖Hook拦截
 Maintainer: KKEngine Team
 Author: KKEngine Team
 Depends: firmware (>= 16.0)

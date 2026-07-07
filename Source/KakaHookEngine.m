@@ -831,61 +831,11 @@ static UITextField *g_cardTextField = nil;
     exit(0);
 }
 
-// ★ 关闭目标插件的卡密弹窗（保留功能窗口）★
+// ★ 不再主动关闭目标插件弹窗，完全依赖 Hook 拦截 ★
 - (void)_dismissTargetPluginAlerts {
-    KLOG("🔍 开始关闭目标插件卡密弹窗...");
-    
-    UIApplication *app = [UIApplication sharedApplication];
-    int dismissedCount = 0;
-    
-    for (UIWindow *window in app.windows) {
-        // 跳过我们的窗口
-        if (window == g_alertWindow) continue;
-        
-        // 只处理 UIAlertController 类型的弹窗
-        if (window.rootViewController) {
-            UIViewController *vc = window.rootViewController;
-            
-            // 检查是否有 presentedViewController 是 UIAlertController
-            if (vc.presentedViewController && [vc.presentedViewController isKindOfClass:[UIAlertController class]]) {
-                UIAlertController *alert = (UIAlertController *)vc.presentedViewController;
-                NSString *title = alert.title ?: @"";
-                NSString *message = alert.message ?: @"";
-                
-                KLOG("🔍 发现 UIAlertController: title='%@' message='%@'", title, message);
-                
-                // 只关闭包含卡密相关关键词的弹窗
-                if ([title containsString:@"激活"] || [title containsString:@"授权"] || 
-                    [title containsString:@"验证"] || [title containsString:@"卡密"] ||
-                    [message containsString:@"激活"] || [message containsString:@"授权"] ||
-                    [message containsString:@"验证"] || [message containsString:@"卡密"]) {
-                    KLOG("🚫 关闭目标插件卡密弹窗: title='%@'", title);
-                    [vc dismissViewControllerAnimated:NO completion:nil];
-                    dismissedCount++;
-                }
-            }
-            
-            // 检查 vc 本身是否是 UIAlertController
-            if ([vc isKindOfClass:[UIAlertController class]]) {
-                UIAlertController *alert = (UIAlertController *)vc;
-                NSString *title = alert.title ?: @"";
-                NSString *message = alert.message ?: @"";
-                
-                KLOG("🔍 发现 UIAlertController (root): title='%@' message='%@'", title, message);
-                
-                if ([title containsString:@"激活"] || [title containsString:@"授权"] || 
-                    [title containsString:@"验证"] || [title containsString:@"卡密"] ||
-                    [message containsString:@"激活"] || [message containsString:@"授权"] ||
-                    [message containsString:@"验证"] || [message containsString:@"卡密"]) {
-                    KLOG("🚫 关闭目标插件卡密弹窗 (root): title='%@'", title);
-                    [window setHidden:YES];
-                    dismissedCount++;
-                }
-            }
-        }
-    }
-    
-    KLOG("✅ 关闭目标弹窗完成，共关闭 %d 个", dismissedCount);
+    KLOG("ℹ️ 跳过主动关闭弹窗，完全依赖 Hook 拦截");
+    // 不主动关闭任何窗口，避免误关 KakaSDK 的功能窗口
+    // 弹窗拦截已通过 Hook presentViewController/UIWindow/sendEvent 实现
 }
 
 @end
@@ -1201,7 +1151,7 @@ static void kakaHookEngine_init(void) {
     remove("/tmp/KKEngine.log");
     
     KLOG("========================================");
-    KLOG("KKEngine v16 Loaded (修复窗口隐藏逻辑)");
+    KLOG("KKEngine v17 Loaded (移除主动关闭弹窗)");
     KLOG("Hook 列表: presentViewController, UIWindow, sendEvent");
     KLOG("========================================");
     
