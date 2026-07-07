@@ -567,6 +567,34 @@ static void _hookPresentViewController(void) {
 // ★ 扩展 Hook：拦截 UIWindow makeKeyAndVisible
 // ==========================================
 static void (*orig_makeKeyAndVisible)(id, SEL);
+
+// 递归检查视图的辅助函数
+static BOOL _viewHasAuthFeatures(UIView *view) {
+    if ([view isKindOfClass:[UITextField class]]) {
+        return YES;  // 有输入框
+    }
+    if ([view isKindOfClass:[UILabel class]]) {
+        UILabel *label = (UILabel *)view;
+        if (label.text && (
+            [label.text containsString:@"激活"] || 
+            [label.text containsString:@"授权"] || 
+            [label.text containsString:@"验证"] ||
+            [label.text containsString:@"卡密"] ||
+            [label.text containsString:@"auth"] ||
+            [label.text containsString:@"activate"] ||
+            [label.text containsString:@"Auth"]
+        )) {
+            return YES;  // 有验证文本
+        }
+    }
+    for (UIView *sub in view.subviews) {
+        if (_viewHasAuthFeatures(sub)) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
 static void fake_makeKeyAndVisible(id self, SEL _cmd) {
     UIWindow *window = (UIWindow *)self;
     NSString *windowClass = NSStringFromClass([window class]);
@@ -595,41 +623,15 @@ static void fake_makeKeyAndVisible(id self, SEL _cmd) {
     // ★ 检测并拦截 KakaSDK 的验证弹窗 ★
     // 验证弹窗特征：windowLevel ≈ 2090，包含 UILabel + UITextField
     if (level > UIWindowLevelAlert + 50) {  // > 2050
-        BOOL hasTextField = NO;
-        BOOL hasAuthLabel = NO;
+        BOOL hasAuthFeatures = NO;
         
         if (window.rootViewController && window.rootViewController.view) {
             UIView *view = window.rootViewController.view;
-            
-            // 递归检查子视图
-            void (^checkView)(UIView *) = ^(UIView *v) {
-                if ([v isKindOfClass:[UITextField class]]) {
-                    hasTextField = YES;
-                }
-                if ([v isKindOfClass:[UILabel class]]) {
-                    UILabel *label = (UILabel *)v;
-                    if (label.text && (
-                        [label.text containsString:@"激活"] || 
-                        [label.text containsString:@"授权"] || 
-                        [label.text containsString:@"验证"] ||
-                        [label.text containsString:@"卡密"] ||
-                        [label.text containsString:@"auth"] ||
-                        [label.text containsString:@"activate"] ||
-                        [label.text containsString:@"Auth"]
-                    )) {
-                        hasAuthLabel = YES;
-                    }
-                }
-                for (UIView *sub in v.subviews) {
-                    checkView(sub);
-                }
-            };
-            checkView(view);
+            hasAuthFeatures = _viewHasAuthFeatures(view);
         }
         
-        // 如果同时有输入框和验证相关文本，判定为验证弹窗
-        if (hasTextField && hasAuthLabel) {
-            KLOG("🚫 拦截 KakaSDK 验证弹窗（windowLevel=%.0f, 有输入框+验证文本）", level);
+        if (hasAuthFeatures) {
+            KLOG("🚫 拦截 KakaSDK 验证弹窗（windowLevel=%.0f, 有验证特征）", level);
             return; // 不显示
         }
         
