@@ -629,6 +629,46 @@ static void _hookSendEvent(void) {
 }
 
 // ==========================================
+// ★ 第四层防御：Hook KakaAuthUIHandler 阻止验证弹窗创建
+// ==========================================
+static void _hookKakaAuthUIHandler(void) {
+    Class kakaAuthClass = NSClassFromString(@"KakaAuthUIHandler");
+    if (!kakaAuthClass) {
+        KLOG("⚠️ 未找到 KakaAuthUIHandler 类，可能 KakaSDK 尚未加载");
+        return;
+    }
+    
+    // Hook init 方法，返回一个假的 handler（不创建窗口）
+    SEL initSel = @selector(init);
+    Method initMethod = class_getInstanceMethod(kakaAuthClass, initSel);
+    if (!initMethod) {
+        KLOG("❌ 未找到 KakaAuthUIHandler init 方法");
+        return;
+    }
+    
+    IMP newInitImp = imp_implementationWithBlock(^id(id self) {
+        KLOG("🚫 拦截 KakaAuthUIHandler init，阻止验证弹窗创建");
+        // 返回 self 但不执行原始 init（不创建窗口）
+        return self;
+    });
+    
+    method_setImplementation(initMethod, newInitImp);
+    KLOG("✅ KakaAuthUIHandler init Hook 已安装（阻止验证弹窗）");
+    
+    // 也 Hook showAuth 或类似方法（如果存在）
+    SEL showSel = NSSelectorFromString(@"showAuth");
+    Method showMethod = class_getInstanceMethod(kakaAuthClass, showSel);
+    if (showMethod) {
+        IMP newShowImp = imp_implementationWithBlock(^(id self) {
+            KLOG("🚫 拦截 KakaAuthUIHandler showAuth");
+            // 不执行任何操作
+        });
+        method_setImplementation(showMethod, newShowImp);
+        KLOG("✅ KakaAuthUIHandler showAuth Hook 已安装");
+    }
+}
+
+// ==========================================
 // ★ 自定义弹窗视图（不依赖 UIAlertController）
 // ==========================================
 static UIWindow *g_alertWindow = nil;
@@ -1151,8 +1191,8 @@ static void kakaHookEngine_init(void) {
     remove("/tmp/KKEngine.log");
     
     KLOG("========================================");
-    KLOG("KKEngine v17 Loaded (移除主动关闭弹窗)");
-    KLOG("Hook 列表: presentViewController, UIWindow, sendEvent");
+    KLOG("KKEngine v18 Loaded (Hook KakaAuthUIHandler)");
+    KLOG("Hook 列表: presentViewController, UIWindow, sendEvent, KakaAuthUIHandler");
     KLOG("========================================");
     
     // 1. Hook ptrace（反调试）
@@ -1165,6 +1205,11 @@ static void kakaHookEngine_init(void) {
     _hookUIWindow();
     _hookSendEvent();
     KLOG("✅ 所有 Hook 安装完成");
+    
+    // 3. ★ 延迟安装 KakaAuthUIHandler Hook（等待 KakaSDK 加载）★
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        _hookKakaAuthUIHandler();
+    });
     
     // 3. ★ 关键：立即显示弹窗（独立于 KakaSDK 基址）★
     KLOG("📢 0.5秒后将显示激活弹窗...");
