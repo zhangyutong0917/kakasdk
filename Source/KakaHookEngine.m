@@ -429,13 +429,21 @@ static void _activateAll(void) {
     KLOG("当前 dword_141795C = %u (防篡改标志)", currentTamper);
     KLOG("当前 qword_1417D88 = 0x%llx", (unsigned long long)currentData);
     
-    // Patch dword_1417958 = 1 (验证通过)
-    if (_setMemoryWritable((void *)authPassedAddr, sizeof(uint32_t))) {
-        *(uint32_t *)authPassedAddr = 1;
-        KLOG("✅ dword_1417958 已设置为 1");
+    // ★ 只清除防篡改标志，不修改 dword_1417958 ★
+    // 让 KakaSDK 正常走初始化流程
+    if (currentTamper != 0) {
+        if (_setMemoryWritable((void *)tamperFlagAddr, sizeof(uint32_t))) {
+            *(uint32_t *)tamperFlagAddr = 0;
+            KLOG("✅ dword_141795C 已清除为 0 (防篡改标志)");
+        } else {
+            KLOG("❌ 无法修改 dword_141795C");
+        }
     } else {
-        KLOG("❌ 无法修改 dword_1417958");
+        KLOG("✓ dword_141795C 已经为 0");
     }
+    
+    // ★ 不 Patch dword_1417958，让 KakaSDK 正常初始化 ★
+    KLOG("ℹ️ 跳过 dword_1417958 Patch，让 KakaSDK 正常初始化");
     
     // ★ 关键：清除防篡改标志 dword_141795C = 0 ★
     // 如果此标志非零，悬浮按钮会被强制隐藏
@@ -588,19 +596,10 @@ static void _findKakaSDK(void) {
 static void _patchAuthOnly(void) {
     if (g_kakaSDKBase == 0) return;
     
-    uintptr_t authPassedAddr = g_kakaSDKBase + KAKA_AUTH_PASSED_VA;
     uintptr_t tamperFlagAddr = g_kakaSDKBase + KAKA_TAMPER_FLAG_VA;
-    uintptr_t dataPtrAddr = g_kakaSDKBase + KAKA_DATA_PTR_VA;
     
-    // Patch dword_1417958 = 1（让 KakaSDK 认为已授权，抑制弹窗逻辑）
-    if (_setMemoryWritable((void *)authPassedAddr, sizeof(uint32_t))) {
-        *(uint32_t *)authPassedAddr = 1;
-        KLOG("✅ 认证标志已预置 (dword_1417958=1)，KakaSDK 弹窗已被抑制");
-    } else {
-        KLOG("❌ 预 Patch dword_1417958 失败");
-    }
-    
-    // ★ 清除防篡改标志 dword_141795C = 0 ★
+    // ★ 只清除防篡改标志，不修改 dword_1417958 ★
+    // 让 KakaSDK 正常走初始化流程，创建悬浮按钮
     uint32_t currentTamper = *(uint32_t *)tamperFlagAddr;
     if (currentTamper != 0) {
         if (_setMemoryWritable((void *)tamperFlagAddr, sizeof(uint32_t))) {
@@ -609,18 +608,19 @@ static void _patchAuthOnly(void) {
         } else {
             KLOG("❌ 预 Patch dword_141795C 失败");
         }
+    } else {
+        KLOG("✓ dword_141795C 已经为 0");
     }
     
-    // Patch qword_1417D88 != 0
-    uint64_t currentData = *(uint64_t *)dataPtrAddr;
-    if (currentData == 0) {
-        if (_setMemoryWritable((void *)dataPtrAddr, sizeof(uint64_t))) {
-            *(uint64_t *)dataPtrAddr = 0x1;
-            KLOG("✅ qword_1417D88 已预置为 0x1");
-        }
+    // ★ 不 Patch dword_1417958，让 KakaSDK 正常初始化 ★
+    KLOG("ℹ️ 跳过 dword_1417958 Patch，让 KakaSDK 正常初始化");
+}
     } else {
-        KLOG("✓ qword_1417D88 已非零 (0x%llx)", (unsigned long long)currentData);
+        KLOG("✓ dword_141795C 已经为 0");
     }
+    
+    // ★ 不 Patch dword_1417958，让 KakaSDK 正常初始化 ★
+    KLOG("ℹ️ 跳过 dword_1417958 Patch，让 KakaSDK 正常初始化");
 }
 
 // ==========================================
