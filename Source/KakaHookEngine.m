@@ -35,8 +35,10 @@ typedef char *caddr_t;
 #define KAKA_AUTH_PASSED_VA     0x1417958   // dword_1417958: 验证通过标志
 #define KAKA_TAMPER_FLAG_VA     0x141795C   // dword_141795C: 防篡改标志（1=检测到篡改，悬浮按钮会被隐藏）
 #define KAKA_DATA_PTR_VA        0x1417D88   // qword_1417D88: 数据指针（必须非零）
+#define KAKA_AUTH_STATUS_VA     0x1417B00   // dword_1417B00: 授权状态（sub_73AC8 检查此值）
 #define KAKA_INIT_FUNC_VA       0x325BC     // InitFunc_0: 初始化函数
 #define KAKA_VERIFY_FUNC_VA     0x32818     // sub_32818: 验证函数
+#define KAKA_FLOAT_BTN_FUNC_VA  0x5AC64     // sub_5AC64: 创建悬浮按钮窗口函数
 
 // ==========================================
 // 功能开关 Key（统一管理，避免拼写错误）
@@ -128,6 +130,7 @@ static void _write_int(uintptr_t offset, int value);
 static void _enableAllFeatures(void);
 static void _activateAll(void);
 static void _callInitFunc(void);
+static void _createFloatingButton(void);
 static void _writeKakaAuthToKeychain(NSString *cardCode);
 static void _saveCard(NSString *card);
 static NSString *_readSavedCard(void);
@@ -394,6 +397,71 @@ static void _callInitFunc(void) {
     KLOG("调用 InitFunc_0 (0x%lx)...", initFuncAddr);
     initFunc();
     KLOG("✅ InitFunc_0 调用完成");
+}
+
+// ★ 关键：手动创建悬浮按钮窗口（sub_5AC64）★
+// 当网络验证通过后，KakaSDK 的初始化已经跑过，悬浮按钮窗口从未被创建
+// 需要手动调用 sub_5AC64 来创建 KakaPassthroughWindow
+static void _createFloatingButton(void) {
+    if (g_kakaSDKBase == 0) {
+        KLOG(" _createFloatingButton: g_kakaSDKBase = 0");
+        return;
+    }
+    
+    // ★ 设置授权状态标记，让 sub_73AC8 检查通过 ★
+    uintptr_t authStatusAddr = g_kakaSDKBase + KAKA_AUTH_STATUS_VA;
+    uint32_t currentAuthStatus = *(uint32_t *)authStatusAddr;
+    KLOG("当前 dword_1417B00 = %u", currentAuthStatus);
+    
+    if (currentAuthStatus == 0) {
+        // 设置为 1，让 (v28 & 1) != 0 条件成立
+        if (_setMemoryWritable((void *)authStatusAddr, sizeof(uint32_t))) {
+            *(uint32_t *)authStatusAddr = 1;
+            KLOG("✅ dword_1417B00 已设置为 1");
+        } else {
+            KLOG("⚠️ 无法修改 dword_1417B00，尝试直接调用");
+        }
+    } else {
+        KLOG("✓ dword_1417B00 已经非零 (%u)", currentAuthStatus);
+    }
+    
+    // ★ 设置 dword_1417958=1，满足授权校验 ★
+    uintptr_t authPassedAddr = g_kakaSDKBase + KAKA_AUTH_PASSED_VA;
+    uint32_t currentAuth = *(uint32_t *)authPassedAddr;
+    if (currentAuth == 0) {
+        if (_setMemoryWritable((void *)authPassedAddr, sizeof(uint32_t))) {
+            *(uint32_t *)authPassedAddr = 1;
+            KLOG("✅ dword_1417958 已设置为 1");
+        }
+    }
+    
+    // ★ 调用 sub_5AC64 创建悬浮按钮窗口 ★
+    uintptr_t floatBtnFuncAddr = g_kakaSDKBase + KAKA_FLOAT_BTN_FUNC_VA;
+    void (*floatBtnFunc)(id) = (void (*)(id))floatBtnFuncAddr;
+    
+    KLOG("🔧 调用 sub_5AC64 创建悬浮按钮 (0x%lx)...", floatBtnFuncAddr);
+    floatBtnFunc(nil);  // 参数传 nil
+    KLOG("✅ sub_5AC64 调用完成");
+    
+    // ★ 强制显示窗口 ★
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        KLOG("🔍 查找并显示 KakaSDK 悬浮按钮窗口...");
+        for (UIWindow *window in [UIApplication sharedApplication].windows) {
+            NSString *cls = NSStringFromClass([window class]);
+            if ([cls containsString:@"PassthroughWindow"]) {
+                KLOG("✅ 找到悬浮按钮窗口: %@ level=%.0f", cls, window.windowLevel);
+                [window setHidden:NO];
+                [window setAlpha:1.0];
+                [window setUserInteractionEnabled:YES];
+                
+                // 递归显示所有子视图
+                for (UIView *view in window.subviews) {
+                    [view setHidden:NO];
+                    [view setAlpha:1.0];
+                }
+            }
+        }
+    });
 }
 
 // 统一激活函数
@@ -1057,6 +1125,11 @@ static void _onVerificationPassed(NSDictionary *data, NSString *card) {
         _activateAll();
         KLOG("_activateAll 完成，准备调用 _enableAllFeatures");
         _enableAllFeatures();
+        
+        // ★ 关键：手动创建悬浮按钮窗口 ★
+        KLOG("准备创建悬浮按钮窗口...");
+        _createFloatingButton();
+        
         KLOG("✅ 补丁应用成功");
     } else {
         // ★ 基址未找到，后台等待（最多 60 秒）★
@@ -1075,6 +1148,7 @@ static void _onVerificationPassed(NSDictionary *data, NSString *card) {
                     _patchAuthOnly();
                     _activateAll();
                     _enableAllFeatures();
+                    _createFloatingButton();
                     KLOG("✅ 补丁应用成功（等待后）");
                 } else {
                     KLOG("❌ 超时：未找到 KakaSDK，功能无法激活");
@@ -1299,7 +1373,7 @@ static void kakaHookEngine_init(void) {
     remove("/tmp/KKEngine.log");
     
     KLOG("========================================");
-    KLOG("KKEngine v23 Loaded (让 KakaSDK 正常初始化，拦截验证弹窗)");
+    KLOG("KKEngine v24 Loaded (手动创建悬浮按钮窗口 sub_5AC64)");
     KLOG("Patch: dword_1417958=1, dword_141795C=0, qword_1417D88!=0");
     KLOG("========================================");
     

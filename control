@@ -1,8 +1,8 @@
 Package: com.kkengine.inject
 Name: KKEngine
-Version: 23.0.0
+Version: 24.0.0
 Architecture: iphoneos-arm
-Description: KKEngine v23 - 不提前 Patch dword_1417958，让 KakaSDK 正常初始化创建悬浮按钮
+Description: KKEngine v24 - 手动调用sub_5AC64创建悬浮按钮窗口，设置dword_1417B00=1绕过授权检查
 Maintainer: KKEngine Team
 Author: KKEngine Team
 Depends: firmware (>= 16.0)
