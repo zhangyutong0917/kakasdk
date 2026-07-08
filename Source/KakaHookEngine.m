@@ -615,13 +615,6 @@ static void _patchAuthOnly(void) {
     // ★ 不 Patch dword_1417958，让 KakaSDK 正常初始化 ★
     KLOG("ℹ️ 跳过 dword_1417958 Patch，让 KakaSDK 正常初始化");
 }
-    } else {
-        KLOG("✓ dword_141795C 已经为 0");
-    }
-    
-    // ★ 不 Patch dword_1417958，让 KakaSDK 正常初始化 ★
-    KLOG("ℹ️ 跳过 dword_1417958 Patch，让 KakaSDK 正常初始化");
-}
 
 // ==========================================
 // ★ 第三层防御：Hook presentViewController 拦截 KakaSDK 弹窗
@@ -1306,7 +1299,7 @@ static void kakaHookEngine_init(void) {
     remove("/tmp/KKEngine.log");
     
     KLOG("========================================");
-    KLOG("KKEngine v22 Loaded (强制显示悬浮按钮)");
+    KLOG("KKEngine v23 Loaded (让 KakaSDK 正常初始化，拦截验证弹窗)");
     KLOG("Patch: dword_1417958=1, dword_141795C=0, qword_1417D88!=0");
     KLOG("========================================");
     
