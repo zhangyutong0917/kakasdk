@@ -444,21 +444,52 @@ static void _createFloatingButton(void) {
     KLOG("✅ sub_5AC64 调用完成");
     
     // ★ 强制显示窗口 ★
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         KLOG("🔍 查找并显示 KakaSDK 悬浮按钮窗口...");
-        for (UIWindow *window in [UIApplication sharedApplication].windows) {
+        
+        // ★ 先列出所有窗口，帮助调试 ★
+        NSArray *allWindows = [UIApplication sharedApplication].windows;
+        KLOG("  当前共有 %lu 个窗口", (unsigned long)allWindows.count);
+        for (UIWindow *window in allWindows) {
+            NSString *cls = NSStringFromClass([window class]);
+            CGFloat level = window.windowLevel;
+            BOOL hidden = window.isHidden;
+            CGFloat alpha = window.alpha;
+            KLOG("    窗口: %@ level=%.0f hidden=%d alpha=%.2f", cls, level, hidden, alpha);
+        }
+        
+        // ★ 查找并显示 PassthroughWindow ★
+        for (UIWindow *window in allWindows) {
             NSString *cls = NSStringFromClass([window class]);
             if ([cls containsString:@"PassthroughWindow"]) {
                 KLOG("✅ 找到悬浮按钮窗口: %@ level=%.0f", cls, window.windowLevel);
+                
+                // ★ 确保窗口可见 ★
                 [window setHidden:NO];
                 [window setAlpha:1.0];
                 [window setUserInteractionEnabled:YES];
                 
-                // 递归显示所有子视图
+                // ★ 递归显示所有子视图 ★
                 for (UIView *view in window.subviews) {
                     [view setHidden:NO];
                     [view setAlpha:1.0];
+                    [view setUserInteractionEnabled:YES];
+                    
+                    // 继续递归子视图
+                    for (UIView *subview in view.subviews) {
+                        [subview setHidden:NO];
+                        [subview setAlpha:1.0];
+                        [subview setUserInteractionEnabled:YES];
+                    }
                 }
+                
+                // ★ 提升窗口层级到最高（超过游戏UI和KKEngine弹窗）★
+                window.windowLevel = UIWindowLevelAlert + 100;  // ≈ 2100+
+                KLOG("✅ 已设置窗口层级为 %.0f", window.windowLevel);
+                
+                // ★ 重新调用 makeKeyAndVisible 确保显示 ★
+                [window makeKeyAndVisible];
+                KLOG("✅ 悬浮按钮窗口已强制显示");
             }
         }
     });
@@ -784,22 +815,35 @@ static void fake_makeKeyAndVisible(id self, SEL _cmd) {
     }
     
     // ★ 检测并拦截 KakaSDK 的验证弹窗 ★
-    // 验证弹窗特征：windowLevel ≈ 2090，包含 UILabel + UITextField
+    // 只拦截明确包含 UITextField 或特定验证文本的窗口
+    // 避免误拦截 KakaSDK 的悬浮按钮窗口
     if (level > UIWindowLevelAlert + 50) {  // > 2050
-        BOOL hasAuthFeatures = NO;
+        BOOL hasUITextField = NO;
+        BOOL hasAuthText = NO;
         
         if (window.rootViewController && window.rootViewController.view) {
             UIView *view = window.rootViewController.view;
-            hasAuthFeatures = _viewHasAuthFeatures(view);
+            // 递归查找 UITextField
+            for (UIView *subview in view.subviews) {
+                if ([subview isKindOfClass:[UITextField class]]) {
+                    hasUITextField = YES;
+                    break;
+                }
+            }
+            // 检查是否有验证相关文本
+            hasAuthText = _viewHasAuthFeatures(view);
         }
         
-        if (hasAuthFeatures) {
-            KLOG("🚫 拦截 KakaSDK 验证弹窗（windowLevel=%.0f, 有验证特征）", level);
+        // ★ 只有同时满足以下条件才拦截：有 UITextField AND 有验证文本 ★
+        // 这样可以避免误拦截悬浮按钮窗口（它没有 UITextField）
+        if (hasUITextField && hasAuthText) {
+            KLOG(" 拦截 KakaSDK 验证弹窗（windowLevel=%.0f, 有UITextField+验证特征）", level);
             return; // 不显示
         }
         
-        // 如果只有高级别窗口但没有明确特征，记录日志但放行
-        KLOG("⚠️ 高级别窗口无验证特征，放行: level=%.0f", level);
+        // 如果有高级别窗口但没有明确验证特征，放行
+        KLOG("⚠️ 高级别窗口无完整验证特征，放行: level=%.0f textField=%d authText=%d", 
+             level, hasUITextField, hasAuthText);
     }
     
     orig_makeKeyAndVisible(self, _cmd);
@@ -1373,7 +1417,7 @@ static void kakaHookEngine_init(void) {
     remove("/tmp/KKEngine.log");
     
     KLOG("========================================");
-    KLOG("KKEngine v24 Loaded (手动创建悬浮按钮窗口 sub_5AC64)");
+    KLOG("KKEngine v25 Loaded (修复hook误拦截+强制显示悬浮按钮)");
     KLOG("Patch: dword_1417958=1, dword_141795C=0, qword_1417D88!=0");
     KLOG("========================================");
     
