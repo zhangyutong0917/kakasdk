@@ -140,6 +140,8 @@ static NSString *_getPersistentDeviceID(void);
 static void _findKakaSDK(void);
 static void _patchAuthOnly(void);
 static void _hookPresentViewController(void);
+static void _hookNSUserDefaults(void);
+static void _hookNSURLSession(void);
 static void _doMainLogic(void);
 static void _startRetryTimer(void);
 static void _onVerificationPassed(NSDictionary *data, NSString *card);
@@ -583,73 +585,22 @@ static void _activateAll(void) {
         KLOG("准备调用 InitFunc_0...");
         _callInitFunc();
         
-        // ★ 关键：强制显示 KakaSDK 悬浮按钮 ★
-        // 由于我们提前 Patch 了认证标志，KakaSDK 可能跳过了悬浮按钮的创建/显示
-        // 需要手动遍历窗口找到 KakaPassthroughWindow 并强制显示
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            KLOG("🔍 开始查找并显示 KakaSDK 悬浮按钮...");
-            BOOL found = NO;
-            for (UIWindow *window in [UIApplication sharedApplication].windows) {
+        // ★ v26: 不再手动创建/强制显示悬浮按钮 ★
+        // 通过 Hook NSUserDefaults/NSURLSession，KakaSDK 自己走完整初始化
+        // 悬浮按钮由 KakaSDK 自动创建和显示（参考 KakaBypass.xm 方案）
+        KLOG("✅ 悬浮按钮由 KakaSDK 自动创建（通过 Hook 绕过验证）");
+        
+        // ★ 延迟检查悬浮按钮状态（仅日志，不强制修改）★
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            KLOG("🔍 检查悬浮按钮状态...");
+            NSArray *allWindows = [UIApplication sharedApplication].windows;
+            KLOG("  当前共有 %lu 个窗口", (unsigned long)allWindows.count);
+            for (UIWindow *window in allWindows) {
                 NSString *cls = NSStringFromClass([window class]);
-                KLOG("  窗口: %@ level=%.0f", cls, window.windowLevel);
-                
-                // 查找 KakaPassthroughWindow 或 KakaImGuiPassthroughWindow
+                KLOG("    窗口: %@ level=%.0f hidden=%d alpha=%.2f", cls, window.windowLevel, window.isHidden, window.alpha);
                 if ([cls containsString:@"PassthroughWindow"]) {
-                    KLOG("✅ 找到 KakaSDK 悬浮按钮窗口: %@", cls);
-                    
-                    // 强制显示窗口
-                    [window setHidden:NO];
-                    [window setAlpha:1.0];
-                    [window setUserInteractionEnabled:YES];
-                    [window makeKeyAndVisible];
-                    KLOG("✅ 窗口已显示");
-                    
-                    // 遍历窗口的子视图，强制显示所有隐藏的元素
-                    if (window.rootViewController && window.rootViewController.view) {
-                        UIView *mainView = window.rootViewController.view;
-                        for (UIView *subview in mainView.subviews) {
-                            NSString *subCls = NSStringFromClass([subview class]);
-                            KLOG("  子视图: %@ hidden=%d alpha=%.1f", subCls, subview.isHidden, subview.alpha);
-                            [subview setHidden:NO];
-                            [subview setAlpha:1.0];
-                            [subview setUserInteractionEnabled:YES];
-                            
-                            // 递归显示子视图的子视图
-                            for (UIView *grandchild in subview.subviews) {
-                                [grandchild setHidden:NO];
-                                [grandchild setAlpha:1.0];
-                                [grandchild setUserInteractionEnabled:YES];
-                            }
-                        }
-                    }
-                    found = YES;
+                    KLOG("    ✅ 找到 KakaSDK 悬浮按钮窗口!");
                 }
-            }
-            
-            if (!found) {
-                KLOG("️ 未找到 KakaPassthroughWindow，悬浮按钮可能尚未创建");
-                // 延迟再次尝试
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    KLOG("🔄 第二次尝试查找悬浮按钮...");
-                    for (UIWindow *window in [UIApplication sharedApplication].windows) {
-                        NSString *cls = NSStringFromClass([window class]);
-                        if ([cls containsString:@"PassthroughWindow"]) {
-                            KLOG("✅ 第二次找到: %@", cls);
-                            [window setHidden:NO];
-                            [window setAlpha:1.0];
-                            [window makeKeyAndVisible];
-                            if (window.rootViewController && window.rootViewController.view) {
-                                for (UIView *subview in window.rootViewController.view.subviews) {
-                                    [subview setHidden:NO];
-                                    [subview setAlpha:1.0];
-                                    [subview setUserInteractionEnabled:YES];
-                                }
-                            }
-                            return;
-                        }
-                    }
-                    KLOG("❌ 第二次仍未找到悬浮按钮窗口");
-                });
             }
         });
         
@@ -887,6 +838,112 @@ static void _hookSendEvent(void) {
     });
     method_setImplementation(method, newImp);
     KLOG("✅ UIApplication sendEvent Hook 已安装");
+}
+
+// ==========================================
+// ★ v26 新增 Hook：NSUserDefaults（绕过 KakaSDK 本地验证）
+// ==========================================
+static BOOL (*orig_boolForKey)(id, SEL, NSString *);
+static id (*orig_objectForKey)(id, SEL, NSString *);
+
+static void _hookNSUserDefaults(void) {
+    Class cls = [NSUserDefaults class];
+    
+    // Hook boolForKey:
+    Method method1 = class_getInstanceMethod(cls, @selector(boolForKey:));
+    if (method1) {
+        orig_boolForKey = (BOOL (*)(id, SEL, NSString *))method_getImplementation(method1);
+        IMP newImp1 = imp_implementationWithBlock(^(id self, NSString *key) {
+            if ([key hasPrefix:@"kaka_auth"] || [key isEqualToString:@"kaka.auth.local"]) {
+                KLOG("🔓 NSUserDefaults boolForKey: '%@' → YES (bypassed)", key);
+                return YES;
+            }
+            return orig_boolForKey(self, @selector(boolForKey:), key);
+        });
+        method_setImplementation(method1, newImp1);
+    }
+    
+    // Hook objectForKey:
+    Method method2 = class_getInstanceMethod(cls, @selector(objectForKey:));
+    if (method2) {
+        orig_objectForKey = (id (*)(id, SEL, NSString *))method_getImplementation(method2);
+        IMP newImp2 = imp_implementationWithBlock(^(id self, NSString *key) {
+            if ([key isEqualToString:@"kaka.auth.local"] || [key hasPrefix:@"kaka_auth"]) {
+                KLOG("🔓 NSUserDefaults objectForKey: '%@' → @YES (bypassed)", key);
+                return @YES;
+            }
+            if ([key isEqualToString:@"last-kami"] || [key isEqualToString:@"last-kami.v1"]) {
+                KLOG("🔓 NSUserDefaults objectForKey: '%@' → fake card (bypassed)", key);
+                return @"BYPASSED-KAKA-2024";
+            }
+            return orig_objectForKey(self, @selector(objectForKey:), key);
+        });
+        method_setImplementation(method2, newImp2);
+    }
+    
+    KLOG("✅ NSUserDefaults Hook 已安装（KakaSDK 本地验证绕过）");
+}
+
+// ==========================================
+// ★ v26 新增 Hook：NSURLSession（拦截 KakaSDK 网络验证）
+// ==========================================
+static id (*orig_dataTaskWithRequest)(id, SEL, NSURLRequest *, void *);
+
+static void _hookNSURLSession(void) {
+    Class cls = [NSURLSession class];
+    SEL sel = @selector(dataTaskWithRequest:completionHandler:);
+    Method method = class_getInstanceMethod(cls, sel);
+    if (!method) {
+        KLOG("❌ 未找到 dataTaskWithRequest:completionHandler:");
+        return;
+    }
+    
+    orig_dataTaskWithRequest = (id (*)(id, SEL, NSURLRequest *, void *))method_getImplementation(method);
+    
+    IMP newImp = imp_implementationWithBlock(^(id self, NSURLRequest *request, void(^completionHandler)(NSData *, NSURLResponse *, NSError *)) {
+        NSString *url = request.URL.absoluteString;
+        
+        // ★ 放行 KKEngine 自己的请求（authsoft.top）★
+        if ([url containsString:@"authsoft.top"]) {
+            return orig_dataTaskWithRequest(self, sel, request, completionHandler);
+        }
+        
+        // ★ 拦截 KakaSDK 的验证请求 ★
+        if ([url containsString:@"auth"] || [url containsString:@"kami"] || 
+            [url containsString:@"verify"] || [url containsString:@"login"]) {
+            KLOG("🚫 拦截 KakaSDK 验证请求: %@", url);
+            
+            // 构造假的成功响应
+            NSDictionary *fakeResponse = @{
+                @"code": @0,
+                @"msg": @"success",
+                @"data": @{
+                    @"token": @"BYPASSED-TOKEN-KAKA",
+                    @"expire": @(9999999999),
+                    @"clearance": @"CLEARANCE-PASSED",
+                    @"status": @"active",
+                    @"user": @{
+                        @"vip": @YES,
+                        @"level": @99,
+                        @"expire_time": @"2099-12-31"
+                    }
+                }
+            };
+            NSData *fakeData = [NSJSONSerialization dataWithJSONObject:fakeResponse options:0 error:nil];
+            NSHTTPURLResponse *httpResponse = [[NSHTTPURLResponse alloc] initWithURL:request.URL statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:@{}];
+            
+            dispatch_async(dispatch_get_main_queue(), ^{
+                completionHandler(fakeData, httpResponse, nil);
+            });
+            
+            return nil;
+        }
+        
+        return orig_dataTaskWithRequest(self, sel, request, completionHandler);
+    });
+    method_setImplementation(method, newImp);
+    
+    KLOG("✅ NSURLSession Hook 已安装（KakaSDK 网络验证绕过）");
 }
 
 // ==========================================
@@ -1170,9 +1227,9 @@ static void _onVerificationPassed(NSDictionary *data, NSString *card) {
         KLOG("_activateAll 完成，准备调用 _enableAllFeatures");
         _enableAllFeatures();
         
-        // ★ 关键：手动创建悬浮按钮窗口 ★
-        KLOG("准备创建悬浮按钮窗口...");
-        _createFloatingButton();
+        // ★ v26: 不再手动创建悬浮按钮 ★
+        // 通过 Hook NSUserDefaults/NSURLSession，KakaSDK 自己走完整初始化
+        KLOG("✅ 悬浮按钮由 KakaSDK 自动创建（通过 Hook 绕过验证）");
         
         KLOG("✅ 补丁应用成功");
     } else {
@@ -1192,8 +1249,8 @@ static void _onVerificationPassed(NSDictionary *data, NSString *card) {
                     _patchAuthOnly();
                     _activateAll();
                     _enableAllFeatures();
-                    _createFloatingButton();
-                    KLOG("✅ 补丁应用成功（等待后）");
+                    // v26: 不再手动创建悬浮按钮
+                    KLOG("✅ 补丁应用成功（等待后，悬浮按钮由 Hook 自动创建）");
                 } else {
                     KLOG("❌ 超时：未找到 KakaSDK，功能无法激活");
                 }
@@ -1417,7 +1474,7 @@ static void kakaHookEngine_init(void) {
     remove("/tmp/KKEngine.log");
     
     KLOG("========================================");
-    KLOG("KKEngine v25 Loaded (修复hook误拦截+强制显示悬浮按钮)");
+    KLOG("KKEngine v26 Loaded (融合KakaBypass: Hook绕过验证+自动创建悬浮按钮)");
     KLOG("Patch: dword_1417958=1, dword_141795C=0, qword_1417D88!=0");
     KLOG("========================================");
     
@@ -1430,7 +1487,9 @@ static void kakaHookEngine_init(void) {
     _hookPresentViewController();
     _hookUIWindow();
     _hookSendEvent();
-    KLOG("✅ 所有 Hook 安装完成");
+    _hookNSUserDefaults();   // ★ v26 新增：绕过 KakaSDK 本地验证 ★
+    _hookNSURLSession();     // ★ v26 新增：绕过 KakaSDK 网络验证 ★
+    KLOG("✅ 所有 Hook 安装完成（含 KakaSDK 验证绕过）");
     
     // 3. ★ 不再 Hook KakaAuthUIHandler（会触发反 Hook 检测）★
     // 改为通过 Hook UIWindow 来阻止弹窗显示
