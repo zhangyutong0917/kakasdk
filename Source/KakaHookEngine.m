@@ -130,7 +130,6 @@ static void _write_int(uintptr_t offset, int value);
 static void _enableAllFeatures(void);
 static void _activateAll(void);
 static void _callInitFunc(void);
-static void _createFloatingButton(void);
 static void _writeKakaAuthToKeychain(NSString *cardCode);
 static void _saveCard(NSString *card);
 static NSString *_readSavedCard(void);
@@ -399,102 +398,6 @@ static void _callInitFunc(void) {
     KLOG("调用 InitFunc_0 (0x%lx)...", initFuncAddr);
     initFunc();
     KLOG("✅ InitFunc_0 调用完成");
-}
-
-// ★ 关键：手动创建悬浮按钮窗口（sub_5AC64）★
-// 当网络验证通过后，KakaSDK 的初始化已经跑过，悬浮按钮窗口从未被创建
-// 需要手动调用 sub_5AC64 来创建 KakaPassthroughWindow
-static void _createFloatingButton(void) {
-    if (g_kakaSDKBase == 0) {
-        KLOG(" _createFloatingButton: g_kakaSDKBase = 0");
-        return;
-    }
-    
-    // ★ 设置授权状态标记，让 sub_73AC8 检查通过 ★
-    uintptr_t authStatusAddr = g_kakaSDKBase + KAKA_AUTH_STATUS_VA;
-    uint32_t currentAuthStatus = *(uint32_t *)authStatusAddr;
-    KLOG("当前 dword_1417B00 = %u", currentAuthStatus);
-    
-    if (currentAuthStatus == 0) {
-        // 设置为 1，让 (v28 & 1) != 0 条件成立
-        if (_setMemoryWritable((void *)authStatusAddr, sizeof(uint32_t))) {
-            *(uint32_t *)authStatusAddr = 1;
-            KLOG("✅ dword_1417B00 已设置为 1");
-        } else {
-            KLOG("⚠️ 无法修改 dword_1417B00，尝试直接调用");
-        }
-    } else {
-        KLOG("✓ dword_1417B00 已经非零 (%u)", currentAuthStatus);
-    }
-    
-    // ★ 设置 dword_1417958=1，满足授权校验 ★
-    uintptr_t authPassedAddr = g_kakaSDKBase + KAKA_AUTH_PASSED_VA;
-    uint32_t currentAuth = *(uint32_t *)authPassedAddr;
-    if (currentAuth == 0) {
-        if (_setMemoryWritable((void *)authPassedAddr, sizeof(uint32_t))) {
-            *(uint32_t *)authPassedAddr = 1;
-            KLOG("✅ dword_1417958 已设置为 1");
-        }
-    }
-    
-    // ★ 调用 sub_5AC64 创建悬浮按钮窗口 ★
-    uintptr_t floatBtnFuncAddr = g_kakaSDKBase + KAKA_FLOAT_BTN_FUNC_VA;
-    void (*floatBtnFunc)(id) = (void (*)(id))floatBtnFuncAddr;
-    
-    KLOG("🔧 调用 sub_5AC64 创建悬浮按钮 (0x%lx)...", floatBtnFuncAddr);
-    floatBtnFunc(nil);  // 参数传 nil
-    KLOG("✅ sub_5AC64 调用完成");
-    
-    // ★ 强制显示窗口 ★
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        KLOG("🔍 查找并显示 KakaSDK 悬浮按钮窗口...");
-        
-        // ★ 先列出所有窗口，帮助调试 ★
-        NSArray *allWindows = [UIApplication sharedApplication].windows;
-        KLOG("  当前共有 %lu 个窗口", (unsigned long)allWindows.count);
-        for (UIWindow *window in allWindows) {
-            NSString *cls = NSStringFromClass([window class]);
-            CGFloat level = window.windowLevel;
-            BOOL hidden = window.isHidden;
-            CGFloat alpha = window.alpha;
-            KLOG("    窗口: %@ level=%.0f hidden=%d alpha=%.2f", cls, level, hidden, alpha);
-        }
-        
-        // ★ 查找并显示 PassthroughWindow ★
-        for (UIWindow *window in allWindows) {
-            NSString *cls = NSStringFromClass([window class]);
-            if ([cls containsString:@"PassthroughWindow"]) {
-                KLOG("✅ 找到悬浮按钮窗口: %@ level=%.0f", cls, window.windowLevel);
-                
-                // ★ 确保窗口可见 ★
-                [window setHidden:NO];
-                [window setAlpha:1.0];
-                [window setUserInteractionEnabled:YES];
-                
-                // ★ 递归显示所有子视图 ★
-                for (UIView *view in window.subviews) {
-                    [view setHidden:NO];
-                    [view setAlpha:1.0];
-                    [view setUserInteractionEnabled:YES];
-                    
-                    // 继续递归子视图
-                    for (UIView *subview in view.subviews) {
-                        [subview setHidden:NO];
-                        [subview setAlpha:1.0];
-                        [subview setUserInteractionEnabled:YES];
-                    }
-                }
-                
-                // ★ 提升窗口层级到最高（超过游戏UI和KKEngine弹窗）★
-                window.windowLevel = UIWindowLevelAlert + 100;  // ≈ 2100+
-                KLOG("✅ 已设置窗口层级为 %.0f", window.windowLevel);
-                
-                // ★ 重新调用 makeKeyAndVisible 确保显示 ★
-                [window makeKeyAndVisible];
-                KLOG("✅ 悬浮按钮窗口已强制显示");
-            }
-        }
-    });
 }
 
 // 统一激活函数
