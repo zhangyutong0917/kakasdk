@@ -41,6 +41,30 @@ typedef char *caddr_t;
 #define KAKA_FLOAT_BTN_FUNC_VA  0x5AC64     // sub_5AC64: 创建悬浮按钮窗口函数
 
 // ==========================================
+// #9 功能偏移量集中定义（便于统一维护和版本更新）
+// ==========================================
+#define OFFSET_DRAW             0x14153F0   // 核心绘制总开关
+#define OFFSET_BROADCAST        0x141537C   // 无线广播
+#define OFFSET_TELEPORT         0x14192A4   // 传送
+#define OFFSET_SHORT_MOVE       0x1417638   // 短距位移
+#define OFFSET_ROOF             0x14154FC   // 去屋顶
+#define OFFSET_MEETING_EXIT     0x14153C8   // 退出会议
+#define OFFSET_VOICE_WALL       0x14153D8   // 隔墙有耳
+#define OFFSET_EGG_BREAKER      0x142A120   // 全图碎蛋
+#define OFFSET_PEER_DETECT      0x142A11C   // 同行检测
+#define OFFSET_IMMOBILIZE       0x1415398   // 无视定身
+#define OFFSET_RANGE_BOOST      0x14153A8   // 范围增幅
+#define OFFSET_DEATH_MIC        0x14153B8   // 死亡开麦
+#define OFFSET_MONITOR          0x1415388   // 监控面板
+#define OFFSET_DRAW_PLAYER_INFO 0x140AF84   // 绘制-人物信息
+#define OFFSET_DRAW_GLOBAL_ID   0x140AF94   // 绘制-全局身份
+#define OFFSET_DRAW_EVENT_LOG   0x140AF7C   // 绘制-事件日志
+#define OFFSET_DRAW_RAY         0x140AF8C   // 绘制-射线
+#define OFFSET_DRAW_STATUS      0x140AF90   // 绘制-状态标记
+#define OFFSET_DRAW_CORPSE      0x140AF88   // 绘制-尸体
+#define OFFSET_DRAW_SCOPE       0x140B088   // 绘制-狙击镜
+
+// ==========================================
 // 功能开关 Key（统一管理，避免拼写错误）
 // ==========================================
 static NSString *const kFeatureDraw        = @"draw";
@@ -337,14 +361,22 @@ static BOOL _isFeatureEnabled(NSString *key, BOOL defaultValue) {
 }
 
 // ==========================================
-// 内存写入辅助函数
+// #6 内存写入辅助函数（带返回值和日志）
 // ==========================================
-static void _write_int(uintptr_t offset, int value) {
-    if (g_kakaSDKBase == 0) return;
+static BOOL _write_int(uintptr_t offset, int value) {
+    if (g_kakaSDKBase == 0) {
+        KLOG("❌ _write_int 失败: g_kakaSDKBase = 0");
+        return NO;
+    }
     
     uintptr_t addr = g_kakaSDKBase + offset;
     if (_setMemoryWritable((void *)addr, sizeof(int))) {
         *(int *)addr = value;
+        KLOG("✅ 写入成功: offset=0x%lx, value=%d", offset, value);
+        return YES;
+    } else {
+        KLOG("❌ 写入失败: offset=0x%lx, value=%d (内存保护修改失败)", offset, value);
+        return NO;
     }
 }
 
@@ -406,7 +438,16 @@ static void _activateAll(void) {
     KLOG("  g_patchDone = %d", g_patchDone);
     KLOG("  g_kakaSDKBase = 0x%lx", g_kakaSDKBase);
     
-    if (g_patchDone || g_kakaSDKBase == 0) {
+    // ★ #4 多线程竞争保护：dispatch_once 确保只执行一次 ★
+    static dispatch_once_t activateOnce;
+    __block BOOL shouldExecute = NO;
+    dispatch_once(&activateOnce, ^{
+        if (!g_patchDone && g_kakaSDKBase != 0) {
+            shouldExecute = YES;
+        }
+    });
+    
+    if (!shouldExecute) {
         KLOG("⚠️ _activateAll 提前返回：g_patchDone=%d, g_kakaSDKBase=0x%lx", g_patchDone, g_kakaSDKBase);
         return;
     }
@@ -493,6 +534,46 @@ static void _activateAll(void) {
         // 悬浮按钮由 KakaSDK 自动创建和显示（参考 KakaBypass.xm 方案）
         KLOG("✅ 悬浮按钮由 KakaSDK 自动创建（通过 Hook 绕过验证）");
         
+        // ★ #3 防篡改标志被重置 → 添加定时器持续监控清零 ★
+        KLOG("🔍 启动防篡改标志监控定时器...");
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            __block int monitorCount = 0;
+            dispatch_source_t monitorTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0));
+            dispatch_source_set_timer(monitorTimer, dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), 0.5 * NSEC_PER_SEC, 0);
+            dispatch_source_set_event_handler(monitorTimer, ^{
+                if (g_kakaSDKBase == 0) return;
+                
+                uintptr_t authPassedAddr = g_kakaSDKBase + KAKA_AUTH_PASSED_VA;
+                uintptr_t tamperFlagAddr = g_kakaSDKBase + KAKA_TAMPER_FLAG_VA;
+                uint32_t authPassed = *(uint32_t *)authPassedAddr;
+                uint32_t tamperFlag = *(uint32_t *)tamperFlagAddr;
+                
+                // 如果验证已通过（dword_1417958=1），停止监控
+                if (authPassed == 1) {
+                    KLOG("✅ 验证已通过 (dword_1417958=1)，停止防篡改监控");
+                    dispatch_source_cancel(monitorTimer);
+                    return;
+                }
+                
+                // 如果防篡改标志被重新置位，立即清零
+                if (tamperFlag != 0) {
+                    monitorCount++;
+                    KLOG("⚠️ 防篡改标志被重置为 %u，第%d次清零", tamperFlag, monitorCount);
+                    if (_setMemoryWritable((void *)tamperFlagAddr, sizeof(uint32_t))) {
+                        *(uint32_t *)tamperFlagAddr = 0;
+                        KLOG("✅ 防篡改标志已重新清零");
+                    }
+                }
+                
+                // 最多监控 60 秒（120 次）
+                if (monitorCount > 120) {
+                    KLOG("⚠️ 防篡改监控超时（60秒），停止监控");
+                    dispatch_source_cancel(monitorTimer);
+                }
+            });
+            dispatch_resume(monitorTimer);
+        });
+        
         // ★ 延迟检查悬浮按钮状态（仅日志，不强制修改）★
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             KLOG("🔍 检查悬浮按钮状态...");
@@ -514,7 +595,7 @@ static void _activateAll(void) {
 }
 
 // ==========================================
-// 查找 KakaSDK.dylib 并获取基地址
+// #8 查找 KakaSDK.dylib 并获取基地址（放宽匹配条件）
 // ==========================================
 static void _findKakaSDK(void) {
     if (g_kakaSDKBase != 0) return;
@@ -523,24 +604,17 @@ static void _findKakaSDK(void) {
         const char *name = _dyld_get_image_name(i);
         if (!name) continue;
         
-        // ★ 精确匹配：只匹配 KakaSDK.dylib，不匹配主程序 kaka.app ★
-        const char *basename = strrchr(name, '/');
-        if (basename) {
-            basename++; // 跳过 '/'
-        } else {
-            basename = name;
-        }
-        
-        // 检查文件名是否以 "KakaSDK" 开头（匹配 KakaSDK.dylib）
-        if (strncmp(basename, "KakaSDK", 7) == 0) {
+        // ★ #8 放宽匹配：查找包含 "KakaSDK" 的 dylib ★
+        // 支持 KakaSDK.dylib、KakaSDK_1.0.dylib、libKakaSDK.dylib 等变体
+        if (strstr(name, "KakaSDK") != NULL) {
             const struct mach_header *header = _dyld_get_image_header(i);
             g_kakaSDKBase = (uintptr_t)header;
-            NSLog(@"[KKEngine] ✓ 找到 KakaSDK: %s", name);
-            NSLog(@"[KKEngine]   基地址：0x%lx", g_kakaSDKBase);
+            KLOG("✓ 找到 KakaSDK: %s", name);
+            KLOG("  基地址：0x%lx", g_kakaSDKBase);
             return;
         }
     }
-    NSLog(@"[KKEngine]  未找到 KakaSDK.dylib");
+    KLOG("  未找到 KakaSDK.dylib");
 }
 
 // ==========================================
@@ -660,8 +734,8 @@ static void fake_makeKeyAndVisible(id self, SEL _cmd) {
         return;
     }
     
-    // ★ 放行 KakaSDK 的悬浮按钮窗口 ★
-    // KakaPassthroughWindow 和 KakaImGuiPassthroughWindow 是悬浮按钮/菜单窗口
+    // ★ #5 放行 KakaSDK 的悬浮按钮窗口（收紧白名单）★
+    // 明确放行 KakaPassthroughWindow 和 KakaImGuiPassthroughWindow
     if ([windowClass containsString:@"PassthroughWindow"]) {
         KLOG("✅ 放行 KakaSDK 悬浮按钮窗口: %@", windowClass);
         orig_makeKeyAndVisible(self, _cmd);
@@ -816,13 +890,21 @@ static void _hookNSURLSession(void) {
             [url containsString:@"verify"] || [url containsString:@"login"]) {
             KLOG("🚫 拦截 KakaSDK 验证请求: %@", url);
             
-            // 构造假的成功响应
+            // ★ 先调用原方法拿到真实 task，然后 cancel 它（避免野指针崩溃）★
+            id realTask = orig_dataTaskWithRequest(self, sel, request, (__bridge void *)completionHandler);
+            if (realTask && [realTask respondsToSelector:@selector(cancel)]) {
+                [realTask cancel];
+                KLOG("✅ 已取消真实网络请求 task");
+            }
+            
+            // ★ 构造假的成功响应（expire 动态计算为一年后）★
+            long expireTime = (long)[[NSDate date] timeIntervalSince1970] + 365 * 24 * 3600;
             NSDictionary *fakeResponse = @{
                 @"code": @0,
                 @"msg": @"success",
                 @"data": @{
                     @"token": @"BYPASSED-TOKEN-KAKA",
-                    @"expire": @(9999999999),
+                    @"expire": @(expireTime),
                     @"clearance": @"CLEARANCE-PASSED",
                     @"status": @"active",
                     @"user": @{
@@ -835,11 +917,12 @@ static void _hookNSURLSession(void) {
             NSData *fakeData = [NSJSONSerialization dataWithJSONObject:fakeResponse options:0 error:nil];
             NSHTTPURLResponse *httpResponse = [[NSHTTPURLResponse alloc] initWithURL:request.URL statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:@{}];
             
-            dispatch_async(dispatch_get_main_queue(), ^{
+            // ★ 异步回调伪造数据 ★
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
                 completionHandler(fakeData, httpResponse, nil);
             });
             
-            return (id)NULL;
+            return realTask;  // ★ 返回真实 task（已 cancel），避免野指针 ★
         }
         
         return orig_dataTaskWithRequest(self, sel, request, (__bridge void *)completionHandler);
@@ -1180,92 +1263,92 @@ static void _enableAllFeatures(void) {
     
     // 核心绘制（默认开启，因为它是其他功能的基础）
     if (_isFeatureEnabled(kFeatureDraw, YES)) {
-        _write_int(0x14153F0, 1);
+        _write_int(OFFSET_DRAW, 1);
         KLOG("✅ 绘制已开启");
     }
     
     // 无线广播（默认关闭）
     if (_isFeatureEnabled(kFeatureBroadcast, NO)) {
-        _write_int(0x141537C, 1);
+        _write_int(OFFSET_BROADCAST, 1);
         KLOG("✅ 无限广播已开启");
     }
     
     // 传送（默认关闭）
     if (_isFeatureEnabled(kFeatureTeleport, NO)) {
-        _write_int(0x14192A4, 1);
+        _write_int(OFFSET_TELEPORT, 1);
         KLOG("✅ 传送已开启");
     }
     
     // 短距位移（默认关闭）
     if (_isFeatureEnabled(kFeatureShortMove, NO)) {
-        _write_int(0x1417638, 1);
+        _write_int(OFFSET_SHORT_MOVE, 1);
         KLOG("✅ 短距位移已开启");
     }
     
     // 去屋顶（默认关闭）
     if (_isFeatureEnabled(kFeatureRoof, NO)) {
-        _write_int(0x14154FC, 1);
+        _write_int(OFFSET_ROOF, 1);
         KLOG("✅ 去屋顶已开启");
     }
     
     // 退出会议（默认关闭）
     if (_isFeatureEnabled(kFeatureMeetingExit, NO)) {
-        _write_int(0x14153C8, 1);
+        _write_int(OFFSET_MEETING_EXIT, 1);
         KLOG("✅ 退出会议已开启");
     }
     
     // 隔墙有耳（默认关闭）
     if (_isFeatureEnabled(kFeatureVoiceWall, NO)) {
-        _write_int(0x14153D8, 1);
+        _write_int(OFFSET_VOICE_WALL, 1);
         KLOG("✅ 隔墙有耳已开启");
     }
     
     // 全图碎蛋（默认关闭）
     if (_isFeatureEnabled(kFeatureEggBreaker, NO)) {
-        _write_int(0x142A120, 1);
+        _write_int(OFFSET_EGG_BREAKER, 1);
         KLOG("✅ 全图碎蛋已开启");
     }
     
     // 同行检测（默认关闭）
     if (_isFeatureEnabled(kFeaturePeerDetect, NO)) {
-        _write_int(0x142A11C, 1);
+        _write_int(OFFSET_PEER_DETECT, 1);
         KLOG("✅ 同行检测已开启");
     }
     
     // 无视定身（默认关闭）
     if (_isFeatureEnabled(kFeatureImmobilize, NO)) {
-        _write_int(0x1415398, 1);
+        _write_int(OFFSET_IMMOBILIZE, 1);
         KLOG("✅ 无视定身已开启");
     }
     
     // 范围增幅（默认关闭）
     if (_isFeatureEnabled(kFeatureRangeBoost, NO)) {
-        _write_int(0x14153A8, 1);
+        _write_int(OFFSET_RANGE_BOOST, 1);
         KLOG("✅ 范围增幅已开启");
     }
     
     // 死亡开麦（默认关闭）
     if (_isFeatureEnabled(kFeatureDeathMic, NO)) {
-        _write_int(0x14153B8, 1);
+        _write_int(OFFSET_DEATH_MIC, 1);
         KLOG("✅ 死亡开麦已开启");
     }
     
     // 监控面板（默认关闭）
     if (_isFeatureEnabled(kFeatureMonitor, NO)) {
-        _write_int(0x1415388, 1);
+        _write_int(OFFSET_MONITOR, 1);
         KLOG("✅ 监控面板已开启");
     }
     
     // 绘制子选项（全部跟随主绘制开关，但也可以单独控制）
     // 这里简化：如果绘制总开关开了，就全开子项
     if (_isFeatureEnabled(kFeatureDraw, YES)) {
-        _write_int(0x140AF84, 1);   // 人物信息
-        _write_int(0x140AF94, 1);   // 全局身份
-        _write_int(0x140AF7C, 1);   // 事件日志
-        _write_int(0x140AF8C, 1);   // 射线
-        _write_int(0x140AF90, 1);   // 状态标记
-        _write_int(0x140AF88, 1);   // 尸体
-        _write_int(0x140B088, 1);   // 狙击镜
+        _write_int(OFFSET_DRAW_PLAYER_INFO, 1);   // 人物信息
+        _write_int(OFFSET_DRAW_GLOBAL_ID, 1);     // 全局身份
+        _write_int(OFFSET_DRAW_EVENT_LOG, 1);     // 事件日志
+        _write_int(OFFSET_DRAW_RAY, 1);           // 射线
+        _write_int(OFFSET_DRAW_STATUS, 1);        // 状态标记
+        _write_int(OFFSET_DRAW_CORPSE, 1);        // 尸体
+        _write_int(OFFSET_DRAW_SCOPE, 1);         // 狙击镜
     }
     
     KLOG("✅ 功能配置应用完成");
@@ -1377,7 +1460,7 @@ static void kakaHookEngine_init(void) {
     remove("/tmp/KKEngine.log");
     
     KLOG("========================================");
-    KLOG("KKEngine v26 Loaded (融合KakaBypass: Hook绕过验证+自动创建悬浮按钮)");
+    KLOG("KKEngine v27 Loaded (10项修复: 防崩溃+防篡改监控+线程安全+偏移量宏定义)");
     KLOG("Patch: dword_1417958=1, dword_141795C=0, qword_1417D88!=0");
     KLOG("========================================");
     
@@ -1389,7 +1472,8 @@ static void kakaHookEngine_init(void) {
     // 2. ★ 安装所有 Hook ★
     _hookPresentViewController();
     _hookUIWindow();
-    _hookSendEvent();
+    // #7 _hookSendEvent 冗余，已注释掉（避免触控卡顿）
+    // _hookSendEvent();
     _hookNSUserDefaults();   // ★ v26 新增：绕过 KakaSDK 本地验证 ★
     _hookNSURLSession();     // ★ v26 新增：绕过 KakaSDK 网络验证 ★
     KLOG("✅ 所有 Hook 安装完成（含 KakaSDK 验证绕过）");
