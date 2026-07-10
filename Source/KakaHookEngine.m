@@ -792,30 +792,28 @@ static void _hookUIWindow(void) {
 }
 
 // ==========================================
-// ★ 扩展 Hook：拦截 UIApplication sendEvent（事件分发）
+// ★ #7 _hookSendEvent 冗余，已注释掉（避免触控卡顿）★
 // ==========================================
-static void (*orig_sendEvent)(id, SEL, UIEvent *);
-static void fake_sendEvent(id self, SEL _cmd, UIEvent *event) {
-    // 检查是否有新的窗口出现
-    if (event.type == UIEventTypeTouches) {
-        // 可以在这里检测并拦截 KakaSDK 的弹窗
-    }
-    orig_sendEvent(self, _cmd, event);
-}
-
-static void _hookSendEvent(void) {
-    Class appClass = [UIApplication class];
-    SEL sel = @selector(sendEvent:);
-    Method method = class_getInstanceMethod(appClass, sel);
-    if (!method) return;
-    
-    orig_sendEvent = (void (*)(id, SEL, UIEvent *))method_getImplementation(method);
-    IMP newImp = imp_implementationWithBlock(^(id self, UIEvent *event) {
-        fake_sendEvent(self, sel, event);
-    });
-    method_setImplementation(method, newImp);
-    KLOG("✅ UIApplication sendEvent Hook 已安装");
-}
+// static void (*orig_sendEvent)(id, SEL, UIEvent *);
+// static void fake_sendEvent(id self, SEL _cmd, UIEvent *event) {
+//     if (event.type == UIEventTypeTouches) {
+//     }
+//     orig_sendEvent(self, _cmd, event);
+// }
+// 
+// static void _hookSendEvent(void) {
+//     Class appClass = [UIApplication class];
+//     SEL sel = @selector(sendEvent:);
+//     Method method = class_getInstanceMethod(appClass, sel);
+//     if (!method) return;
+//     
+//     orig_sendEvent = (void (*)(id, SEL, UIEvent *))method_getImplementation(method);
+//     IMP newImp = imp_implementationWithBlock(^(id self, UIEvent *event) {
+//         fake_sendEvent(self, sel, event);
+//     });
+//     method_setImplementation(method, newImp);
+//     KLOG("✅ UIApplication sendEvent Hook 已安装");
+// }
 
 // ==========================================
 // ★ v26 新增 Hook：NSUserDefaults（绕过 KakaSDK 本地验证）
