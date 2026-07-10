@@ -150,7 +150,7 @@ static void _addLog(NSString *msg) {
 // 前向声明
 // ==========================================
 static BOOL _setMemoryWritable(void *address, size_t size);
-static void _write_int(uintptr_t offset, int value);
+static BOOL _write_int(uintptr_t offset, int value);
 static void _enableAllFeatures(void);
 static void _activateAll(void);
 static void _callInitFunc(void);
