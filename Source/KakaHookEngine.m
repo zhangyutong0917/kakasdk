@@ -19,6 +19,9 @@
 #import <Security/Security.h>
 #import <CommonCrypto/CommonDigest.h>
 #import <sys/sysctl.h>
+#import <sys/stat.h>
+#import <sys/proc.h>
+#include <errno.h>
 #include <stdarg.h>
 #import "fishhook/fishhook.h"
 
@@ -387,6 +390,117 @@ static int (*orig_ptrace)(int, pid_t, caddr_t, int);
 static int fake_ptrace(int req, pid_t pid, caddr_t addr, int data) {
     if (req == PT_DENY_ATTACH || req == 31) return 0;
     return orig_ptrace(req, pid, addr, data);
+}
+
+// ==========================================
+// ★ v28 新增：环境伪装 Hook（隐藏越狱环境）★
+// ==========================================
+
+// --- stat: 隐藏越狱文件路径 ---
+static int (*orig_stat)(const char *path, struct stat *buf);
+static int fake_stat(const char *path, struct stat *buf) {
+    if (path != NULL) {
+        NSString *pathStr = [NSString stringWithUTF8String:path];
+        NSArray *jailbreakPaths = @[
+            @"/var/jb",
+            @"/Applications/Cydia.app",
+            @"/Library/MobileSubstrate",
+            @"/bin/bash",
+            @"/etc/apt",
+            @"/usr/sbin/sshd",
+            @"/usr/libexec/cydia",
+            @"/private/var/lib/apt",
+            @"/private/var/libexec",
+            @"/private/var/stash",
+            @"/private/var/mobile/Library/SBSettings",
+            @"MobileSubstrate",
+            @"Cydia",
+            @"substrate",
+            @"KKEngine",
+            @"KakaHookEngine",
+            @"libKKEngine",
+        ];
+        for (NSString *jbPath in jailbreakPaths) {
+            if ([pathStr containsString:jbPath]) {
+                errno = ENOENT;
+                return -1; // 文件不存在
+            }
+        }
+    }
+    return orig_stat(path, buf);
+}
+
+// --- access: 隐藏越狱文件路径 ---
+static int (*orig_access)(const char *path, int mode);
+static int fake_access(const char *path, int mode) {
+    if (path != NULL) {
+        NSString *pathStr = [NSString stringWithUTF8String:path];
+        NSArray *jailbreakPaths = @[
+            @"/var/jb",
+            @"/Applications/Cydia.app",
+            @"/Library/MobileSubstrate",
+            @"/bin/bash",
+            @"/etc/apt",
+            @"/usr/sbin/sshd",
+            @"/usr/libexec/cydia",
+            @"/private/var/lib/apt",
+            @"/private/var/libexec",
+            @"/private/var/stash",
+            @"MobileSubstrate",
+            @"Cydia",
+            @"substrate",
+            @"KKEngine",
+            @"KakaHookEngine",
+            @"libKKEngine",
+        ];
+        for (NSString *jbPath in jailbreakPaths) {
+            if ([pathStr containsString:jbPath]) {
+                errno = ENOENT;
+                return -1;
+            }
+        }
+    }
+    return orig_access(path, mode);
+}
+
+// --- sysctl: 隐藏调试标志 P_TRACED ---
+static int (*orig_sysctl)(int *name, u_int namelen, void *oldp, size_t *oldlenp, const void *newp, size_t newlen);
+static int fake_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, const void *newp, size_t newlen) {
+    int ret = orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
+    // 检测是否是查询进程信息的调用（KERN_PROC_PID）
+    if (namelen >= 4 && name[0] == CTL_KERN && name[1] == KERN_PROC &&
+        name[2] == KERN_PROC_PID && oldp != NULL) {
+        struct kinfo_proc *info = (struct kinfo_proc *)oldp;
+        // 清除 P_TRACED 标志（表示未调试）
+        info->kp_proc.p_flag &= ~P_TRACED;
+    }
+    return ret;
+}
+
+// --- _dyld_get_image_name: 隐藏 KKEngine.dylib 自身 ---
+static const char* (*orig_dyld_get_image_name)(uint32_t image_index);
+static const char* fake_dyld_get_image_name(uint32_t image_index) {
+    const char *name = orig_dyld_get_image_name(image_index);
+    if (name && (strstr(name, "KKEngine") != NULL || strstr(name, "KakaHookEngine") != NULL)) {
+        // 返回一个无害的系统库名称，防止崩溃
+        return "/usr/lib/libSystem.B.dylib";
+    }
+    return name;
+}
+
+// --- _dyld_image_count: 保持不变（不暴露额外镜像数量） ---
+// 注意：不减少 count，因为只替换名称即可
+
+// 环境伪装 Hook 初始化函数
+static void _installEnvHidingHooks(void) {
+    struct rebinding envRebinds[] = {
+        {"stat", fake_stat, (void *)&orig_stat},
+        {"access", fake_access, (void *)&orig_access},
+        {"sysctl", fake_sysctl, (void *)&orig_sysctl},
+        {"_dyld_get_image_name", fake_dyld_get_image_name, (void *)&orig_dyld_get_image_name},
+    };
+    rebind_symbols(envRebinds, sizeof(envRebinds) / sizeof(envRebinds[0]));
+    KLOG("✅ 环境伪装 Hook 已安装（stat/access/sysctl/dyld 共 4 项）");
 }
 
 // ==========================================
@@ -1458,7 +1572,7 @@ static void kakaHookEngine_init(void) {
     remove("/tmp/KKEngine.log");
     
     KLOG("========================================");
-    KLOG("KKEngine v27 Loaded (10项修复: 防崩溃+防篡改监控+线程安全+偏移量宏定义)");
+    KLOG("KKEngine v28 Loaded (环境伪装: stat/access/sysctl/dyld + 10项修复)");
     KLOG("Patch: dword_1417958=1, dword_141795C=0, qword_1417D88!=0");
     KLOG("========================================");
     
@@ -1467,14 +1581,17 @@ static void kakaHookEngine_init(void) {
     rebind_symbols(&ptraceRebind, 1);
     KLOG("✅ ptrace 已屏蔽");
     
-    // 2. ★ 安装所有 Hook ★
+    // 2. ★ 环境伪装 Hook（隐藏越狱环境 + 调试标志 + 自身 dylib）★
+    _installEnvHidingHooks();
+    
+    // 3. ★ 安装所有 Hook ★
     _hookPresentViewController();
     _hookUIWindow();
     // #7 _hookSendEvent 冗余，已注释掉（避免触控卡顿）
     // _hookSendEvent();
     _hookNSUserDefaults();   // ★ v26 新增：绕过 KakaSDK 本地验证 ★
     _hookNSURLSession();     // ★ v26 新增：绕过 KakaSDK 网络验证 ★
-    KLOG("✅ 所有 Hook 安装完成（含 KakaSDK 验证绕过）");
+    KLOG("✅ 所有 Hook 安装完成（含环境伪装+KakaSDK 验证绕过）");
     
     // 3. ★ 不再 Hook KakaAuthUIHandler（会触发反 Hook 检测）★
     // 改为通过 Hook UIWindow 来阻止弹窗显示
