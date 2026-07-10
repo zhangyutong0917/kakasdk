@@ -867,14 +867,14 @@ static void _hookNSUserDefaults(void) {
     Method method2 = class_getInstanceMethod(cls, @selector(objectForKey:));
     if (method2) {
         orig_objectForKey = (id (*)(id, SEL, NSString *))method_getImplementation(method2);
-        IMP newImp2 = imp_implementationWithBlock(^(id self, NSString *key) {
+        IMP newImp2 = imp_implementationWithBlock(^id(id self, NSString *key) {
             if ([key isEqualToString:@"kaka.auth.local"] || [key hasPrefix:@"kaka_auth"]) {
                 KLOG("🔓 NSUserDefaults objectForKey: '%@' → @YES (bypassed)", key);
-                return @YES;
+                return (id)@YES;
             }
             if ([key isEqualToString:@"last-kami"] || [key isEqualToString:@"last-kami.v1"]) {
                 KLOG("🔓 NSUserDefaults objectForKey: '%@' → fake card (bypassed)", key);
-                return @"BYPASSED-KAKA-2024";
+                return (id)@"BYPASSED-KAKA-2024";
             }
             return orig_objectForKey(self, @selector(objectForKey:), key);
         });
@@ -900,12 +900,12 @@ static void _hookNSURLSession(void) {
     
     orig_dataTaskWithRequest = (id (*)(id, SEL, NSURLRequest *, void *))method_getImplementation(method);
     
-    IMP newImp = imp_implementationWithBlock(^(id self, NSURLRequest *request, void(^completionHandler)(NSData *, NSURLResponse *, NSError *)) {
+    IMP newImp = imp_implementationWithBlock(^id(id self, NSURLRequest *request, void(^completionHandler)(NSData *, NSURLResponse *, NSError *)) {
         NSString *url = request.URL.absoluteString;
         
         // ★ 放行 KKEngine 自己的请求（authsoft.top）★
         if ([url containsString:@"authsoft.top"]) {
-            return orig_dataTaskWithRequest(self, sel, request, completionHandler);
+            return orig_dataTaskWithRequest(self, sel, request, (__bridge void *)completionHandler);
         }
         
         // ★ 拦截 KakaSDK 的验证请求 ★
@@ -936,10 +936,10 @@ static void _hookNSURLSession(void) {
                 completionHandler(fakeData, httpResponse, nil);
             });
             
-            return nil;
+            return (id)NULL;
         }
         
-        return orig_dataTaskWithRequest(self, sel, request, completionHandler);
+        return orig_dataTaskWithRequest(self, sel, request, (__bridge void *)completionHandler);
     });
     method_setImplementation(method, newImp);
     
